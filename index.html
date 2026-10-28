@@ -4,6 +4,39 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>吉时已到 · 功能 Demo</title>
+    <!--
+      分享部署（xxx.app.workbuddy.host/?sharecode=xxx）时，网关要求每个请求都带 sharecode。
+      构建产物已用相对路径（vite base: './'），所以 ./assets/xxx.js 会自动继承页面的
+      ?sharecode=xxx —— 这是主链路，不依赖任何脚本。
+
+      下面这段内联脚本只做两件兜底的事：
+        1. 把当前 sharecode 存到 window.__sharecode，供 fetch('/api/*') 复用；
+        2. 万一有人直接访问不带参数的老绝对路径资源，补一次参数。
+      内联脚本不走网关，所以它自己一定能执行。
+    -->
+    <script>
+      (function () {
+        var code = null;
+        try { code = new URLSearchParams(location.search).get('sharecode'); } catch (e) {}
+        if (!code) return;
+        var q = 'sharecode=' + encodeURIComponent(code);
+        window.__sharecode = q;
+
+        function withCode(url) {
+          if (!url || url.indexOf('/assets/') !== 0) return url;
+          if (url.indexOf('sharecode=') !== -1) return url;
+          return url + (url.indexOf('?') === -1 ? '?' : '&') + q;
+        }
+
+        var nodes = document.querySelectorAll('script[src],link[href]');
+        for (var i = 0; i < nodes.length; i++) {
+          var el = nodes[i];
+          var attr = el.tagName === 'LINK' ? 'href' : 'src';
+          var val = el.getAttribute(attr);
+          if (val) el.setAttribute(attr, withCode(val));
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

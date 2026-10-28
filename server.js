@@ -29,7 +29,12 @@ const env = {
 };
 
 const api = createApi(env);
-const publicHost = env.PUBLIC_ORIGIN ? new URL(env.PUBLIC_ORIGIN).host : null;
+// 反向代理会把 host 改写成容器内地址（localhost:PORT），而浏览器发来的 Origin 是公网域名。
+// 平台没有透传 x-forwarded-host，所以这里必须显式配置公网来源，否则分享域名下所有 POST 都会被判成跨站。
+const PUBLIC_ORIGIN = env.PUBLIC_ORIGIN || 'https://jishi-smart-alarm.app.workbuddy.host';
+const publicHost = new URL(PUBLIC_ORIGIN).host;
+// 统一给 api 层一份已知的公网域名，供其同源校验使用
+env.PUBLIC_ORIGIN = PUBLIC_ORIGIN;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -54,10 +59,33 @@ function securityHeaders(res) {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
 }
 
-async function sendFile(res, filePath, status = 200) {
-  const data = await fsp.readFile(filePath);
+// 分享链接形如 https://xxx.app.workbuddy.host/?sharecode=ABC123。
+// 网关要求「每个请求」都带这个参数，但它只加在入口 HTML 的 URL 上，
+// 页面里的 /assets/xxx.js 是绝对路径、不带参数 → 403 → 白屏。
+// 所以这里在吐 index.html 时，把 sharecode 拼进所有静态资源引用。
+function injectSharecode(html, search) {
+  const params = new URLSearchParams(search || '');
+  const code = params.get('sharecode');
+  if (!code) return html;
+  const q = `?sharecode=${encodeURIComponent(code)}`;
+  // 只处理 /assets/ 开头的本地资源，外链与接口不动。
+  return html.replace(/(\s(?:src|href)=")(\/assets\/[^"?]+)(")/g, (m, pre, url, post) => `${pre}${url}${q}${post}`);
+}
+
+async function sendFile(res, filePath, status = 200, sharecode = null) {
+  let data = await fsp.readFile(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  // 入口 HTML 需要按当前请求的 sharecode 动态改写，不能缓存。
+  if (ext === '.html' && sharecode) {
+    res.statusCode = status;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    securityHeaders(res);
+    res.end(injectSharecode(data.toString('utf8'), sharecode));
+    return;
+  }
   res.statusCode = status;
-  res.setHeader('Content-Type', MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
+  res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
   res.setHeader('Cache-Control', path.basename(filePath).includes('.') && filePath.includes('assets')
     ? 'public, max-age=31536000, immutable'
     : 'no-cache');
@@ -66,7 +94,8 @@ async function sendFile(res, filePath, status = 200) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+  const url = new URL(req.url || '/', 'http://localhost');
+  const pathname = url.pathname;
   securityHeaders(res);
 
   if (pathname.startsWith('/api/')) {
@@ -96,7 +125,7 @@ const server = http.createServer(async (req, res) => {
     if (stat.isFile()) return sendFile(res, target);
   } catch {}
   try {
-    return await sendFile(res, path.join(dist, 'index.html'), 200);
+    return await sendFile(res, path.join(dist, 'index.html'), 200, url.search);
   } catch {
     res.statusCode = 500;
     res.end('dist 不存在，请先执行 npm run build');

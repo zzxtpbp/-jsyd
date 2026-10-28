@@ -1,0 +1,46 @@
+/* 四步引导 / 复查 / 环境音 / 雨雪备用方式的样式。
+   单独成文件，避免改动单行压缩的 dashboard.css 造成解析问题。
+   第一条来自 codex/a-frontend 分支 dashboard.css 的原始定义，不能丢。 */
+.guide-overlay{position:fixed;inset:0;z-index:45;background:#111915d9;backdrop-filter:blur(12px);display:grid;place-items:center;padding:20px}
+/* 深色浮层里必须显式给浅色文字：body 的 color 是深色的（浅色主题），
+   不声明就会被继承成 #202d28，深底深字 → 看起来像「一片模糊的空白」。 */
+.guide-window{width:min(100%,520px);max-height:90vh;overflow:auto;background:#303c33;border-radius:28px;padding:28px;color:#f2f7ee}
+.guide-window h2,.guide-window h3,.guide-window strong,.guide-window b{color:#f2f7ee}
+.guide-window .subtle,.guide-window small{color:#c3d2b7}
+.guide-window select,.guide-window input{background:#ffffff;color:#202d28}
+/* .capsule 默认用 --fill-1（浅色主题下的浅底）配 --accent（深绿），
+   落在深色浮层里就成了深底深字，必须换成浮层内的浅字配色。 */
+.guide-window .capsule{background:#ffffff1a;border-color:#ffffff2e;color:#e8f5d9}
+.guide-window .capsule i{background:#c8f49a}
+.guide-window .service-row strong{color:#f2f7ee}
+.guide-window .service-row small{color:#a9bda1}
+.guide-window p{font-size:12px;line-height:1.8;color:#c3d2b7;margin:10px 0}
+.guide-window h3{font-size:16px;font-weight:400;margin-bottom:10px}
+.guide-window .button-line{margin-top:23px}
+.guide-window .button-line button{flex:1}
+.guide-window section{display:flex;flex-direction:column;gap:12px;margin:8px 0 4px}
+.guide-window label{display:flex;flex-direction:column;gap:6px;font-size:.86rem}
+.guide-window label.check-line{flex-direction:row;align-items:center;gap:9px}
+.guide-window section > .soft-button{align-self:flex-start}
+.wizard-progress{height:5px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden;margin:6px 0 18px}
+.wizard-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#c8f49a,#a6cc73);transition:width .28s ease}
+.wizard-q{font-size:1.02rem;font-weight:600;letter-spacing:.2px}
+.wizard-sub{margin:0;font-size:.85rem;line-height:1.6;opacity:.72}
+.setup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px}
+.guide-window .button-line{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+.guide-window .button-line .wizard-skip{margin-left:auto;opacity:.7}
+
+/* B08 雨雪备用方式：设置页面板 + 引导内紧凑版共用同一套行布局 */
+.fallback-row{display:grid;grid-template-columns:auto minmax(120px,1fr) minmax(110px,1fr);align-items:end;gap:10px;padding:12px 14px;border-radius:16px;background:#ffffff0a;border:1px solid #ffffff14}
+.fallback-row>strong{font-size:.86rem;align-self:center;white-space:nowrap}
+.fallback-row label{display:flex;flex-direction:column;gap:6px;font-size:.8rem}
+.fallback-row .subtle{grid-column:1 / -1;font-size:.76rem;line-height:1.5;opacity:.7}
+.fallback-compact{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:16px;border:1px dashed #ffffff26}
+.fallback-compact .fallback-row{background:transparent;border:0;padding:0}
+
+@media(max-width:640px){
+  .setup-grid{grid-template-columns:1fr}
+  .guide-window{padding:22px}
+  .fallback-row{grid-template-columns:1fr}
+}
+@media (max-width:560px){.guide-overlay{padding:0;align-items:flex-end}.guide-window{max-height:92vh;border-radius:24px 24px 0 0}}

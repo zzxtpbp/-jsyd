@@ -11,6 +11,11 @@ test('真实逐时预报按出发时段匹配，缺失或超范围不调整',()=
   const r=assess(w,{duration:300},d,15,10);
   assert.equal(r.advance,15);assert.equal(r.approval,true);
   assert.throws(()=>assess(w,{duration:300},new Date(2026,9,20),15,30));
+  // 概率缺失曾经直接抛错；按 docs/weather-rules.md 决定 2，改为标记 unknown，
+  // 由界面显示「天气未知」，不再让整个通勤方案失败，也不再假装「不下雨」。
   w.hourly.weather_code[0]=null;
-  assert.throws(()=>assess(w,{duration:300},d,15,30));
+  w.hourly.precipitation_probability[0]=null;
+  const unknown=assess(w,{duration:300},d,15,30);
+  assert.equal(unknown.unknown,true);
+  assert.equal(unknown.advance,0);
 });

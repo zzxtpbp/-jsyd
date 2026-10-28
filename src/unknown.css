@@ -1,0 +1,32 @@
+/* State styling for "probability unknown". Must read differently from both
+   "raining/snowing" and "clear", so users never mistake missing data for no rain. */
+
+/* Core card: neutral gray. Not a false "calm", not a false "alert". */
+.core-card.unknown{background:var(--fill-grad);border-color:var(--line);opacity:.96}
+.core-card.unknown .core-advance>strong{color:var(--sub)}
+.core-card.unknown .core-weather h2{color:var(--ink)}
+
+/* Hour chips: dashed border so it cannot be read as "definitely dry". */
+.hour-chip.unknown{border-style:dashed;border-color:var(--line);background:transparent}
+.hour-chip.unknown>b{color:var(--sub);font-style:italic}
+.hour-chip.unknown .hour-bar>i{background:var(--line)}
+
+/* Day summary badge */
+.day-flag.unknown{background:transparent;color:var(--sub);border:1px dashed var(--line)}
+
+/* Day block hourly rows */
+.day-hour.unknown{border-style:dashed;opacity:.75}
+.day-hour.unknown b{font-style:italic}
+
+/* B04: which spot the commute verdict is computed from. Normal weight when the
+   home forecast is in use; amber-ish warning when it is a fallback to the main
+   location, because in that case the conclusion may change. */
+.spot-line{display:flex;align-items:center;gap:8px;margin:12px 0 0;font-size:12px;
+  line-height:1.6;color:var(--sub);padding:10px 14px;border-radius:14px;
+  background:var(--fill-1);border:1px solid var(--line)}
+.spot-line>svg{width:15px;height:15px;flex:0 0 auto}
+.spot-line.fallback{color:#b4790f;background:#f5a62314;border-color:#f5a62340}
+
+/* B09: provenance note for travel duration. Kept distinct from generic
+   fine-print so it does not get skipped as boilerplate. */
+.route-note{opacity:.78;font-style:normal}

@@ -3,7 +3,13 @@ export { gcjToWgs } from '../src/coordinates.js';
 import { coordinate } from '../src/live.js';
 
 function required(env, name) {
-  if (!env[name]?.trim()) throw new Error(`请先在 .env.local 配置 ${name}，然后重启 npm run dev`);
+  if (!env[name]?.trim()) {
+    // 线上没有 .env.local，用户看到「请先在 .env.local 配置」只会困惑。
+    // 用 503 明确区分「服务没配好」而不是「你的参数写错了」。
+    const e = new Error(`服务未配置：缺少 ${name}。请为部署环境配置该密钥后重启服务（本地放 .env.local，线上用环境变量）`);
+    e.status = 503;
+    throw e;
+  }
   return env[name].trim();
 }
 async function upstream(fetcher, url, options = {}) {
@@ -92,7 +98,15 @@ export function createApi(env, fetcher=fetch) {
     res.setHeader('Cache-Control','no-store');
     const send=(status,body)=>{res.statusCode=status;res.end(JSON.stringify(body));};
     try {
-      if(req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) return send(403,{error:'仅允许同源请求'});
+      // 浏览器发的是 Origin（含协议），req.headers.host 是反向代理写入的内部 host，
+      // 分享域名下两者不一致。server.js 已按公网域名校正过 host，这里再兜一层 forwarded-host。
+      if (req.headers.origin) {
+        let originHost = null;
+        try { originHost = new URL(req.headers.origin).host; } catch {}
+        const forwarded = (req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+        const allowed = new Set([req.headers.host, forwarded, env.PUBLIC_ORIGIN ? new URL(env.PUBLIC_ORIGIN).host : null].filter(Boolean));
+        if (originHost && !allowed.has(originHost)) return send(403,{error:'仅允许同源请求'});
+      }
       if(pathname==='/api/status' && req.method==='GET') return send(200,{amap:!!env.AMAP_WEB_KEY,qweather:!!env.QWEATHER_API_KEY&&!!env.QWEATHER_API_HOST,qwen:!!env.DASHSCOPE_API_KEY&&!!env.QWEN_BASE_URL,model:env.QWEN_MODEL||'qwen-plus'});
       if(req.method!=='POST') return send(405,{error:'仅支持 POST'});
       requests=requests.filter(t=>Date.now()-t<60000); if(requests.length>=20) return send(429,{error:'请求过于频繁，请一分钟后重试'}); requests.push(Date.now());
@@ -143,6 +157,53 @@ export function createApi(env, fetcher=fetch) {
         const origin=`${a.lon},${a.lat}`,destination=`${b.lon},${b.lat}`;
         // v5 驾车结构为 route.paths[0]，耗时在 cost.duration 里
         const grab=(p)=>{const path=p?.route?.paths?.[0];return {distance:numeric(path?.distance),duration:numeric(path?.cost?.duration),steps:(path?.steps||[]).map(s=>({instruction:s.instruction,road:s.road,polyline:s.polyline,distance:numeric(s.step_distance),traffic:(s.tmcs||[]).map(t=>t.status)}))};};
+
+        // B08：按指定交通方式单独查一次耗时。
+        // 备用方式（公交 / 地铁 / 步行 / 骑行）不能复用驾车耗时 ——
+        // 公交绕路、地铁换乘，用时与自驾差得很远，直接套用会算出错误的叫醒时间。
+        // 只查一种方式，不额外拉全量数据，省配额也快。
+        if(typeof body.mode==='string' && body.mode){
+          const only=async()=>{
+            if(body.mode==='bus'){
+              // v5 公交路径规划：transits[0] 的 cost.duration 为全程秒数。
+              const r=await amap('/v5/direction/transit/integrated',{origin,destination,city:'全国',show_fields:'cost',strategy:'0'})
+                .catch(()=>amap('/v3/direction/transit/integrated',{origin,destination,city:'全国',strategy:'0'}));
+              const path=r?.route?.transits?.[0]||r?.transits?.[0];
+              const duration=numeric(path?.cost?.duration);
+              const distance=numeric(path?.distance);
+              if(!Number.isFinite(duration))throw new Error('高德未返回有效公交路线，请换一种备用方式');
+              return {distance:Number.isFinite(distance)?distance:0,duration,label:'公交'};
+            }
+            if(body.mode==='subway'){
+              // 地铁与公交共用公交路径规划接口，只用它作为地铁耗时来源；
+              // 拿不到地铁专用结果时明确报错，不退回驾车耗时。
+              const r=await amap('/v5/direction/transit/integrated',{origin,destination,city:'全国',show_fields:'cost',strategy:'0'})
+                .catch(()=>amap('/v3/direction/transit/integrated',{origin,destination,city:'全国',strategy:'0'}));
+              const path=r?.route?.transits?.[0]||r?.transits?.[0];
+              const duration=numeric(path?.cost?.duration);
+              if(!Number.isFinite(duration))throw new Error('高德未返回有效地铁路线，请换一种备用方式');
+              return {distance:numeric(path?.distance)||0,duration,label:'地铁'};
+            }
+            if(body.mode==='walk'){
+              const r=await amap('/v3/direction/walking',{origin,destination});
+              const p=r?.route?.paths?.[0];
+              const duration=numeric(p?.duration),distance=numeric(p?.distance);
+              if(!Number.isFinite(duration))throw new Error('高德未返回有效步行路线');
+              return {distance, duration, label:'步行'};
+            }
+            if(body.mode==='bike'){
+              const r=await amap('/v4/direction/bicycling',{origin,destination},true)
+                .catch(()=>amap('/v3/direction/bicycling',{origin,destination}));
+              const p=r?.data?.paths?.[0]||r?.route?.paths?.[0];
+              const duration=numeric(p?.duration),distance=numeric(p?.distance);
+              if(!Number.isFinite(duration))throw new Error('高德未返回有效骑行路线');
+              return {distance, duration, label:'骑行'};
+            }
+            return null;
+          };
+          const one=await only();
+          if(one)return send(200,{modes:{[body.mode]:one},mode:body.mode,fetched:Date.now(),source:'高德地图',routeNote:'查询时刻路线估算，不代表明早路况'});
+        }
         let driveErr='';
         // 带 polyline 的请求需要额外权限，失败时降级为不带折线的路线（地图底图会降级为示意图）。
         const drive=await amap('/v5/direction/driving',{origin,destination,show_fields:'cost,tmcs,polyline',strategy:'32'}).then(grab)
@@ -157,7 +218,12 @@ export function createApi(env, fetcher=fetch) {
         ]);
         const walk=walkRaw,bike=bikeRaw;
         const modes={};
-        if(drive&&Number.isFinite(drive.duration)&&Number.isFinite(drive.distance))modes.drive={...drive,label:'驾车 / 打车'};
+        // 自驾与打车共用同一份驾车路线耗时，但是两个不同的出行方式：
+        // 打车还要等车，自驾不用。以前合成一个 'drive' 让自驾也被加了等车时间（B03）。
+        if(drive&&Number.isFinite(drive.duration)&&Number.isFinite(drive.distance)){
+          modes.drive={...drive,label:'自驾'};
+          modes.taxi={...drive,label:'打车'};
+        }
         const walkPath=walk?.route?.paths?.[0];
         if(walkPath&&Number.isFinite(numeric(walkPath.distance))&&Number.isFinite(numeric(walkPath.duration)))modes.walk={distance:numeric(walkPath.distance),duration:numeric(walkPath.duration),steps:[],label:'步行'};
         const bikePath=bike?.data?.paths?.[0];
@@ -202,18 +268,11 @@ export function createApi(env, fetcher=fetch) {
         const path=routing.route?.paths?.[0];
         const route={distance:numeric(path?.distance),duration:numeric(path?.cost?.duration)};
         if(!Number.isFinite(route.distance)||!Number.isFinite(route.duration)) throw new Error('高德未返回有效驾车路线');
-        // 打车难叫程度：雨雪越大越难叫车，等车时间越长（分钟），用于打车出行的额外提前。
-        const hours=weatherResult.weather?.hourly||[];
-        let taxiDelay=0,severityText='无降水';
-        if(Array.isArray(hours.time)){
-          const idx=hours.time.findIndex(t=>t&&Number(t.slice(0,13).replace(/[^0-9]/g,''))>=0);
-          const codes=hours.weather_code||[];const snow=codes.some(c=>[71,73,75,77,85,86].includes(c));
-          const heavy=codes.some(c=>c>=65&&c<70||c===75||c===85||c===86||c===95);
-          const rain=codes.some(c=>c>=51);
-          if(snow){taxiDelay=heavy?30:20;severityText=heavy?'降雪较强':'有降雪';}
-          else if(rain){taxiDelay=heavy?20:10;severityText=heavy?'降雨较强':'有降雨';}
-        }
-        const result={weather:weatherResult.weather,route,taxiDelay,severityText,fetched:Date.now(),source:'高德路线 / 和风天气',routeNote:'查询时刻高德路线估算，不代表未来出发时段的路况预测'};
+        // 等车时间不再由代码按天气猜测。原来这里按「雨越大等越久」给 10~30 分钟，
+        // 用户没同意过；且那段 findIndex 判断恒为真、起不到过滤作用（B03）。
+        // 等车时间改为用户自己在设置里填，默认 0，见 commute.taxiWait。
+        const result={weather:weatherResult.weather,route,taxiDelay:0,severityText:'',
+          fetched:Date.now(),source:'高德路线 / 和风天气',routeNote:'查询时刻高德路线估算，不代表未来出发时段的路况预测'};
         if(cached.size>50) cached.clear(); cached.set(key,result);return send(200,result);
       }
       if(pathname==='/api/explain') {
@@ -226,6 +285,6 @@ export function createApi(env, fetcher=fetch) {
         return send(200,{text,model:env.QWEN_MODEL||'qwen-plus'});
       }
       return send(404,{error:'接口不存在'});
-    } catch(e) { return send(400,{error:e.message}); }
+    } catch(e) { return send(e.status === 503 ? 503 : 400,{error:e.message}); }
   };
 }

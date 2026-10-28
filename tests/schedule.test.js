@@ -27,9 +27,13 @@ test('上海场景：明天下午有雨但早高峰无雨，通勤窗口不判�
   else{codes.push(1);probs.push(3);amounts.push(0);}
  }
  const weather={hourly:{time:times,weather_code:codes,precipitation_probability:probs,precipitation:amounts}};
- // 全天口径：受下午降水影响 → affected（这正是修掉的旧 bug）
+ // 全天口径：门槛 30 时，下午 5%~11% 的概率与代码 61 都不达标 ——
+ // 旧实现因为 amount>0 或 code>=51 把全天判成 wet，那正是 B01 修掉的绕过路径。
  const full=daySummary(weather,'2026-10-17',30);
- assert.equal(full.affected,true);
+ assert.equal(full.affected,false);
+ // 把下午概率提到 60%，全天口径才应当受下午降水影响。
+ const heavy={hourly:{time:times,weather_code:codes,precipitation_probability:probs.map((p,i)=>i>=15&&i<=18?60:p),precipitation:amounts}};
+ assert.equal(daySummary(heavy,'2026-10-17',30).affected,true);
  // 通勤窗口口径：07:00 出发 → 07:35 抵达 → 无降水、不提前
  const dep=new Date(2026,9,17,7,0),arr=new Date(2026,9,17,7,35);
  const win=commuteWeatherWindow(weather,dep,arr,30);

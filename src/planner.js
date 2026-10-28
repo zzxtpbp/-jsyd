@@ -1,4 +1,11 @@
+// ⚠️ DEMO ONLY —— 本文件是早期场景演示用的独立决策层，产品界面（Dashboard / server）不使用它。
+// 真正在跑的计划逻辑在 src/plan.js（候选 → 合并 → 状态）。两者并存只是为了让
+// tests/planner.test.js 里的场景推演仍可复现，避免把演示口径误当成线上口径。
+// 如果要在 UI 里用这里的任何函数，请先把它并入 plan.js，并删掉这条注释。
+//
 // 纯函数决策层。天气与路线来自可替换的数据适配器，不依赖大模型计算时间。
+export const DEMO_ONLY = true;
+
 export const defaults = {
   arrival: '09:00', preparation: 40, buffer: 10, extra: 5,
   normalDuration: 30, alternateDuration: 45, maxAdvance: 30,

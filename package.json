@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "npm run build --if-present && node server.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:render": "node scripts/render-smoke.mjs",
+    "verify": "npm run build && npm test && npm run test:render"
   },
   "dependencies": {
     "react": "^19.3.1",

@@ -2,8 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { getJSON, coordinate, weatherName, assess } from './live.js';
 
 const ALARM_KEY = 'jishi-web-alarm-v1';
+// 分享部署时网关要求每个请求都带 sharecode，见 Dashboard.jsx 里的同名函数说明。
+function shareParam(){try{const c=new URLSearchParams(location.search).get('sharecode');return c?`sharecode=${encodeURIComponent(c)}`:'';}catch{return '';}}
 async function api(path, body) {
-  const response = await fetch(`/api/${path}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(60000) });
+  const q = shareParam();
+  const url = `/api/${path}${q ? (path.includes('?') ? '&' : '?') + q : ''}`;
+  const response = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(60000) });
   const data = await response.json();
   if(!response.ok) throw new Error(data.error || '接口请求失败');
   return data;
