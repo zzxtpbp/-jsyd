@@ -1,0 +1,1310 @@
+diff --git "a/docs/B05-\345\233\272\345\256\232\346\217\220\345\211\215-\346\216\245\345\205\245\350\257\264\346\230\216.md" "b/docs/B05-\345\233\272\345\256\232\346\217\220\345\211\215-\346\216\245\345\205\245\350\257\264\346\230\216.md"
+new file mode 100644
+index 0000000..f53efaf
+--- /dev/null
++++ "b/docs/B05-\345\233\272\345\256\232\346\217\220\345\211\215-\346\216\245\345\205\245\350\257\264\346\230\216.md"
+@@ -0,0 +1,103 @@
++# B05：固定提前候选计算（独立交付，尚未接入页面）
++
++日期：2026-10-29
++
++## 交付范围
++
++本次只新增 `src/fixedAdvance.js`、`tests/fixedAdvance.test.js` 和本文档，不覆盖原文件，不修改 UI、天气判断、基础闹钟或保存流程，没有推送或合并 GitHub。完整代码在独立下载目录验证。
++
++基线是 GitHub `zzxtpbp/-jsyd` 的 `codex/a-frontend` 提交 `0c5e7a895ab877d97de23a37c721e7286715f2b4`。它与主分支尚未合并；本交付只新增文件，便于另一个分支审查后使用。此目录的 Git 历史是本地下载快照记录，不是完整上游历史，请用增量包或补丁合入真正仓库，不要把快照历史合并到上游。
++
++已经完成：固定提前候选的纯函数与测试。
++
++尚未完成：与 B 的最终天气触发结果字段对接、固定与智能候选合并、页面调用、有效期判断、闹钟保存和后台执行。不能把本模块交付理解为网页已经可以自动提前响铃。
++
++## 输入
++
++```js
++import { calculateFixedCandidate } from './fixedAdvance.js';
++
++const candidate = calculateFixedCandidate({
++  baseAlarmAt: Date.parse('2026-10-30T07:00:00+08:00'),
++  fixedEnabled: true,
++  fixedMinutes: 30,
++  weatherTriggered: true,
++});
++// candidate.status === 'ready'
++// candidate.wakeAt === Date.parse('2026-10-30T06:30:00+08:00')
++```
++
++| 字段 | 约定 |
++| --- | --- |
++| `baseAlarmAt` | 基础闹钟下一次响铃的 Unix 毫秒时间戳，包含日期。沿用现有网页闹钟 `at` 的数值类型；不能直接传 `07:00`、日期字符串或秒时间戳。 |
++| `fixedEnabled` | 严格布尔值。只有 `true` 开启。 |
++| `fixedMinutes` | 用户设置的 0–240 整数分钟。为 0 时不生成重复候选；不受智能 `maxAdvance` 限制。 |
++| `weatherTriggered` | 上游统一判断后的 `true` / `false` / `null`。`null`、缺失或非布尔值均按未知处理，不推断为晴天。 |
++
++本模块不接收概率、天气代码、预警或实况原始数据。由统一天气模块先按用户阈值及已确认规则得出触发结果，再映射进 `weatherTriggered`。该名称是本模块的接入参数，不代表已验证你们尚未上传的最终字段名称。
++
++## 输出
++
++沿用 A 草案的结果字段：
++
++```js
++{
++  baseAlarmAt,                 // 有效的基础时间戳；无效则 null
++  wakeAt,                      // 仅 ready 时有候选，其余 null
++  departAt: null,               // 固定提前不计算出门时间
++  reason: '...',
++  validUntil: null,             // 由上游数据有效期管理模块补齐
++  gapMinutes: null,             // 固定模式不计算智能上限缺口
++  status: 'ready',              // ready | unavailable | weather_unknown
++  source: 'fixed',
++  updatedAt: null,              // 调用方记录，函数不读取当前时间
++  executionState: 'suggested',  // 只表示建议，不表示保存或执行成功
++}
++```
++
++- `ready`：模式开启、天气触发、分钟数大于零、时间有效。
++- `weather_unknown`：有效设置下天气触发结果未知，`wakeAt` 为 `null`。
++- `unavailable`：模式关闭、天气未触发、提前为零或设置无效，具体原因见 `reason`。
++
++缺少出门时间、数据有效期和执行回执时保留 `null`，不伪造数据。调用方必须同时检查 `status === 'ready'` 和候选时间，不能只看 `executionState`。
++
++## 后续如何接入（本次不修改旧文件）
++
++1. 从启用的基础闹钟解析下一次发生时间，转换成毫秒时间戳。不要直接用一条已经过期的一次性闹钟。
++2. 统一天气模块检查查询时段、数据完整性与有效期，算出触发结果。缺失、失败或过期且无法复用时传 `null`，不要用 `Boolean(...)` 转换结果。
++3. 调用本模块。固定模式不依赖路线；高德失败时也应能独立计算。
++4. 调度模块检查候选是否仍在未来，并按上游天气数据补齐有效期和更新时间。本函数不读 `Date.now()`，因此不会替调用方拦截过期任务。
++5. 候选合并模块选择固定与智能中较早的有效候选，遵守用户已选择的备用策略。本模块不删除已有有效方案，也不改变基础闹钟。
++6. 由已有保存入口更新同一条主要提前闹钟，避免重复追加。保存完成后才由保存模块改变执行状态。
++
++`00:10` 提前 30 分钟返回前一天 `23:40` 的实际时间戳，展示时请保留日期信息，不能只显示钟面时间。
++
++## 验证结果及限制
++
++直接验证新增模块，无需安装第三方依赖：
++
++```sh
++node --test tests/fixedAdvance.test.js
++```
++
++结果：10 项通过，包括正常提前、关闭/未触发、未知天气、0 分钟、跨日、固定量独立于智能上限、非法分钟数/时间/布尔值、重复调用与不修改输入。
++
++包含现有纯逻辑和环境配置测试：
++
++```sh
++node --test tests/fixedAdvance.test.js tests/planner.test.js tests/schedule.test.js tests/commuteSettings.test.js tests/live.test.js tests/vite-env.test.js
++```
++
++结果：24 项通过。完整 `npm test` 的原有两项 HTTP 接口测试，在基线就因为当前沙箱禁止监听 `127.0.0.1` 报 `listen EPERM`，不能宣称全量测试通过。
++
++构建在本机已有依赖 Vite 8.2.0、React/React DOM 19.2.8 下通过；仓库声明的是 Vite ^8.3.4、React/React DOM ^19.3.1，当前无法通过网络安装锁文件版本，未验证该版本组合。没有更改 package.json 或锁文件，也没有新增依赖。由于页面尚未导入本模块，构建只验证原页面兼容；新增模块本身由上述测试执行验证。
++
++## 如何合入增量包
++
++ZIP 包中只有三个新增文件，没有旧项目文件。补丁也只包含这三个文件。在真正仓库根目录先运行：
++
++```sh
++git apply --check /path/to/吉时-B05-仅新增文件.patch
++```
++
++确认没有同名文件冲突后，再运行 `git apply`，或人工复制新增文件；随后执行新增测试。补丁不接入 UI，也不会覆盖原来的计算入口。
+diff --git "a/docs/B07-\345\200\231\351\200\211\345\220\210\345\271\266-\346\216\245\345\205\245\350\257\264\346\230\216.md" "b/docs/B07-\345\200\231\351\200\211\345\220\210\345\271\266-\346\216\245\345\205\245\350\257\264\346\230\216.md"
+new file mode 100644
+index 0000000..84d056c
+--- /dev/null
++++ "b/docs/B07-\345\200\231\351\200\211\345\220\210\345\271\266-\346\216\245\345\205\245\350\257\264\346\230\216.md"
+@@ -0,0 +1,106 @@
++# B07：固定与智能候选合并（独立交付）
++
++日期：2026-10-29。只新增 `src/mergeAdvance.js`、`tests/mergeAdvance.test.js` 和本文档；不覆盖旧代码、B05、UI 或配置，不创建/修改/删除闹钟，不推送或合并 GitHub。
++
++本次基于前次下载的 A 分支快照 `0c5e7a895ab877d97de23a37c721e7286715f2b4`，没有重新同步远端。模块沿用 A 草案结果字段；下列函数参数及合并结果是独立模块接口，接入前需对齐你们最终共享格式。
++
++## 已完成的规则
++
++- 两个模式都开启时，选择时间更早的有效候选；只有一个模式开启时，仅考虑该模式。两个候选同一时间时固定优先，保持稳定。
++- 只输出一个候选，基础闹钟独立保留。
++- 候选必须属于本次 `baseAlarmAt`、响铃时间仍在未来且早于基础、有效期尚未到期。缺失有效期也不参与。
++- 未知天气、路线失败、不可用、待确认、旧版 `approval` 等状态不参与。未确认超限不能绕过规则。
++- 智能 `capped` 只表示上游已经按用户授权上限限制时间，且仍有正数 `gapMinutes`；它可以参与，但输出保留 `capped` 与缺口，不能展示成时间已经足够。
++- 没有有效候选时返回 `keep_existing`，含义是本次不更新、不删除；已有计划是否仍有效，由原调度模块另外检查。
++
++## 输入与输出
++
++```js
++import { mergeAdvanceCandidates } from './mergeAdvance.js';
++
++const result = mergeAdvanceCandidates({
++  baseAlarmAt,       // 本次基础闹钟，Unix 毫秒时间戳
++  now,               // 调用方显式传入 Date.now()；测试传固定时间
++  fixedEnabled,      // 严格 true 才启用
++  smartEnabled,      // 严格 true 才启用
++  fixedCandidate,    // A 草案 plan 对象或 null
++  smartCandidate,    // A 草案 plan 对象或 null
++});
++```
++
++候选参与选择的时间条件为：`now < wakeAt < baseAlarmAt` 且 `validUntil > now`。所有参与比较的时间必须是有效整数毫秒时间戳；候选的 `baseAlarmAt` 必须与输入完全一致。
++
++可参与的状态为 `ready`，以及满足上述语义、`gapMinutes` 是正有限数值的智能 `capped`。本模块不执行智能上限算法，不验证上游算出的路线耗时是否准确，B06 应先完成这些工作。`source` 原样保留，不用它判断模式；模式由输入槽位和输出 `selectedMode` 区分。
++
++有候选时：
++
++```js
++{
++  status: 'ready',       // 选中 capped 时仍为 capped
++  selectedMode: 'smart', // fixed 或 smart
++  action: 'suggest',
++  candidate: { /* 选中候选的复制，executionState 强制为 suggested */ },
++  reason: '...',
++}
++```
++
++无候选时：
++
++```js
++{
++  status: 'unavailable', selectedMode: null, action: 'keep_existing',
++  candidate: null, reason: '...',
++}
++```
++
++外层 `status` 表示合并是否得到可用候选，不替代两个输入的各自失败原因；需要显示“天气未知”或“路线失败”时，UI 仍应读取原候选状态。无候选绝不把基础闹钟包装成一个新提前闹钟。
++
++返回候选是浅复制，当前约定字段均为标量；不要把含可变路线对象的整个 API 响应塞进候选后再通过输出修改嵌套对象。
++
++## B05 如何衔接
++
++B05 固定计算没有查询天气，所以其 `validUntil` 与 `updatedAt` 均为 `null`，直接传给 B07 会被拒绝。应先由天气适配层验证数据、时段、地点和触发结果，再附上真实有效期：
++
++```js
++const rawFixed = calculateFixedCandidate({
++  baseAlarmAt, fixedEnabled, fixedMinutes, weatherTriggered,
++});
++const fixedCandidate = rawFixed.status === 'ready'
++  ? { ...rawFixed, validUntil: weatherValidUntil, updatedAt: evaluatedAt }
++  : rawFixed;
++```
++
++这里的 `weatherValidUntil`、`evaluatedAt` 必须由统一的数据有效期策略提供；不能为了通过合并检查，在每次计算时随便延长有效期。`validUntil` 检查的是当前计算数据能否使用，不要求天气缓存一直有效到响铃时刻；已保存闹钟的执行生命周期由调度模块管理。
++
++`baseAlarmAt` 只用于避免混入不同次基础时间，不能代替账号或通勤计划 ID。调用方仍需确保两个候选属于同一用户、同一通勤计划、同一版本设置和本次查询范围；服务端身份隔离应在调用前完成。
++
++## 接入后的保存边界
++
++1. 分别取得固定与智能候选，并准备上游真实有效期。
++2. 传入用户开关和当前时间调用本模块。
++3. `action === 'suggest'` 时展示候选及原因；`capped` 必须同时展示缺口。
++4. 由统一保存入口对同一条主要提前闹钟进行新增或更新，保存前再次检查时间和数据有效期。输出只有一个候选并不能保证存储层没有重复记录，幂等保存由后续闹钟更新模块负责。
++5. `keep_existing` 时不写入、不删除；基础闹钟照常保留，原调度模块仍可处理旧计划自身的失效。
++
++本次没有接入页面、实际天气或路线接口、后台调度、提醒及响铃，不能当作完整自动闹钟功能上线。
++
++## 验证
++
++独立运行，无需安装新依赖：
++
++```sh
++node --test tests/mergeAdvance.test.js
++```
++
++新增 15 项测试通过；与 B05 的 10 项一起运行共 25 项通过。覆盖较早选择、平局、模式开关、过期/缺少有效期、待确认、错误基础时间、无候选、跨日、capped 缺口和输入不变性。另执行了 B05 真实函数输出经测试有效期适配后交给 B07 的检查；这是离线检查，不代表真实天气接口联调成功。
++
++完整 `npm test` 共 42 项：40 项通过，原有两项 HTTP 测试因沙箱不允许监听 `127.0.0.1` 报 `listen EPERM`，与前次基线一致，不能宣称全量通过。没有修改依赖或锁文件，也没有用构建结果代替新模块测试。
++
++ZIP 和补丁都只包含本次三个新增文件。可在真正仓库根目录先执行：
++
++```sh
++git apply --check /path/to/吉时-B07-仅新增文件.patch
++# 审查通过后，再执行 git apply；不要把本地快照 Git 历史合并到上游。
++```
++
++补丁本身不自动接入页面。B07 测试不依赖 B05 文件，可以独立合入；B05 需按前次交付另行接入。
+diff --git "a/docs/\347\213\254\347\253\213\351\227\271\351\222\237\346\250\241\345\235\227-\344\270\211\351\241\271\350\241\245\345\205\205-\346\216\245\345\205\245\350\257\264\346\230\216.md" "b/docs/\347\213\254\347\253\213\351\227\271\351\222\237\346\250\241\345\235\227-\344\270\211\351\241\271\350\241\245\345\205\205-\346\216\245\345\205\245\350\257\264\346\230\216.md"
+new file mode 100644
+index 0000000..3fc1f80
+--- /dev/null
++++ "b/docs/\347\213\254\347\253\213\351\227\271\351\222\237\346\250\241\345\235\227-\344\270\211\351\241\271\350\241\245\345\205\205-\346\216\245\345\205\245\350\257\264\346\230\216.md"
+@@ -0,0 +1,149 @@
++# 吉时：独立闹钟模块三项补充
++
++日期：2026-10-29。
++
++本轮新增三个模块和四份测试。所有模块只返回数据，不请求接口、不读写 localStorage、不修改传入的闹钟、不创建系统闹钟，没有推送或合并 GitHub。原有 30 个源码/配置/文档文件及前次 B05、B07 交付文件保持不变。
++
++基于前次下载的 A 分支快照 `0c5e7a895ab877d97de23a37c721e7286715f2b4`，本轮没有重新拉取远端。这些接口是独立交付接口，需与三人的最终数据契约适配，不能当作已合入主分支的功能。
++
++## 文件与职责
++
++| 文件 | 作用 |
++| --- | --- |
++| `src/smartAdvance.js` | B06 智能提前候选：按到达目标倒推、限制智能上限、报告时间缺口。 |
++| `src/alarmTiming.js` | 检查复查时间、固定量、智能上限及铃前环境音是否冲突。 |
++| `src/alarmWrite.js` | 提出创建/更新/不变/保留/阻断操作及字段补丁，不实际保存。 |
++| `tests/smartAdvance.test.js` | 智能计算的 11 项测试。 |
++| `tests/alarmTiming.test.js` | 时间冲突检查的 9 项测试。 |
++| `tests/alarmWrite.test.js` | 保存操作建议的 14 项测试。 |
++| `tests/commuteFlow.test.js` | 调用 B05、B06、B07、时间检查和保存建议的 9 个离线场景。 |
++
++## 1. 智能提前候选
++
++```js
++import { calculateSmartCandidate } from './smartAdvance.js';
++
++const smartCandidate = calculateSmartCandidate({
++  baseAlarmAt, arrivalAt, now,       // Unix 整数毫秒时间戳，包含日期
++  smartEnabled, weatherTriggered,   // 开关和上游预先计算的天气触发结果
++  durationMinutes,                  // 0–1440 整数分钟，路线总耗时
++  preparation, buffer, extra,       // 0–240 整数分钟
++  maxAdvance,                       // 用户授权的智能上限，0–240 整数分钟
++  validUntil, updatedAt,            // 上游数据有效期、更新时间；不能自行伪造
++});
++```
++
++计算公式：
++
++```text
++所需出发时间 = 到达目标 - 路线总耗时 - 到达余量
++所需叫醒时间 = 所需出发时间 - 常规准备 - 雨雪额外准备
++允许的最早智能叫醒 = 基础闹钟 - 用户智能上限
++实际智能候选 = 两个叫醒时间中较晚的一个
++时间缺口 = 实际候选比所需叫醒晚了多少分钟（向上取整）
++```
++
++例如基础 07:00、目标到达 08:00，路线 60 分钟、准备 30、余量 10、额外准备 10：所需叫醒 06:10。用户上限 60 时输出 06:10；上限 30 时输出 06:30，`status:'capped'` 且 `gapMinutes:20`。上限为 0 时不生成与基础重复的候选，但仍保留缺口信息。
++
++结果沿用 A 草案字段，增加 `desiredWakeAt` 保存未受上限限制的所需叫醒时间。`departAt` 是满足到达目标所需的出发时间；受上限限制后，不能把它说成用户一定来得及的出发时间。`executionState` 只为 `suggested`。
++
++只有天气明确触发时生成候选。未知天气输出 `weather_unknown`；没有有效路线耗时输出 `route_failed`；分钟配置无效、数据过期、时间已错过或无需提前时没有可用候选。不会创建更晚的“提前闹钟”。
++
++路线时间须由上游提供，并明确是否包含步行接驳、候车、换乘、打车等待和用户选择的雨雪替代交通方式。用户未填写的数据不能冒充为零；本模块也不会编造明早拥堵、公交停运或排队时间。`extra` 只放准备雨具等额外准备，不应重复计入已经包含在路线中的耗时。
++
++上游应结合天气和路线的数据策略，提供两者均可用的有效期（通常取各自有效期较早者），以及真实更新时间；本模块只做格式、到期与未来时间检查。
++
++## 2. 设置时间冲突检查
++
++```js
++import { checkAlarmTiming } from './alarmTiming.js';
++
++const timing = checkAlarmTiming({
++  baseAlarmAt, recheckAt,  // 显式日期的毫秒时间戳
++  fixedEnabled, smartEnabled, fixedMinutes, maxAdvance,
++  ambientEnabled, ambientOffset,
++  fallback,               // 保留基础闹钟 / 仅按固定模式
++});
++```
++
++输出包含 `ok`、`earliestAlarmAt`、`earliestSoundAt`、`issues` 和 `warnings`。每个问题提供 `code` 和中文说明，可以供页面显示，不需要根据文案字符串识别类型。
++
++最早可能主铃 = 基础减去已开启模式中的最大提前量；铃前环境音开启时，再减 `ambientOffset`。晨间复查必须严格早于最早发声时间，等于也会冲突。这个版本没有设置网络重试余量，接入层应给真实查询和计算留出时间，不能只提前一毫秒就视为实际可靠。
++
++固定模式也依赖天气判断，所以只有固定模式时仍检查复查时间。未开启模式的旧分钟设置不参与；关闭环境音时不检查旧偏移。环境音开启要求偏移 1–60 整数分钟。
++
++仅智能模式会产生非阻断 `smart_without_fixed` 提醒，便于实现用户已要求的“建议同时绑定固定模式”弹窗。固定未开启时不能选择“仅按固定模式”备用。
++
++选择备用不豁免复查冲突。已有有效备用计划可以由原调度继续执行，但不代表这套新的冲突设置可直接保存。本模块只检查时间关系，不启动复查任务、不检查系统权限，也不播放环境音。
++
++前端的 `recheckTime:'HH:mm'` 必须按用户时区与本次基础闹钟日期转换为 `recheckAt`。跨午夜时可能需要前一晚复查，不能无条件使用基础闹钟同日的时钟文字。这个模块不猜日期，也不检查当前时间是否已经错过复查；首次设置与调度层需检查实际可执行性。
++
++## 3. 闹钟保存操作建议
++
++```js
++import { suggestAlarmWrite } from './alarmWrite.js';
++
++const operation = suggestAlarmWrite({
++  mergeResult,   // B07 输出；这里只消费最终候选
++  alarms,        // 当前用户自己的完整闹钟记录
++  baseAlarmId,
++  commutePlanId, // 稳定且非空的通勤计划 ID；不是昵称
++  now,
++});
++```
++
++返回 `action`、`targetId`、`patch`、`idempotencyKey`、`reason`：
++
++| action | 含义 |
++| --- | --- |
++| `create` | 建议创建一条主要提前闹钟，补丁不包含随机 ID。 |
++| `update` | 同计划已经有一条，建议复用其 ID 更新；保留用户名称。 |
++| `noop` | 内容完全一致，无需重复保存。 |
++| `keep_existing` | 没有新候选，或已有同次且启用的更早闹钟，本次不写入、不删除。 |
++| `blocked` | 候选已失效、基础不匹配、记录冲突或闹钟尚待调度处理，先停止保存。 |
++
++保存前再次检查候选有效期、未来时间和基础闹钟是否启用、时间是否一致，避免用户在预览后改了基础闹钟仍保存旧结果。
++
++新主要闹钟使用 `planKind:'primary'`、`commutePlanId`、`baseAlarmId`、`baseAlarmAt`；智能警示保存在 `planStatus` 和 `gapMinutes`。这些归属字段需由接入层迁移和持久化；原 A 分支的主要闹钟缺少 `commutePlanId`，遇到这类记录会明确阻断，不会擅自认领或新增重复闹钟。
++
++同计划存在多条主要闹钟、重复 ID、主要闹钟正在响铃，或者已经到点但仍启用而调度尚未处理时，都不会覆盖。已到点的旧闹钟不能被重置为更晚的未来闹钟；这个边界已有单元和串联回归。
++
++幂等键使用 `[commutePlanId, baseAlarmId, baseAlarmAt]` 的 JSON 编码。它提供给真正存储层使用；仅有这个纯函数不能保证并发时不会重复创建，实际保存仍需要原子 upsert/唯一约束或单次串行提交。调用方创建时生成一次真实 ID，更新时按 `targetId` 精确合并补丁，不用本地快照替换整个闹钟列表。
++
++调用前需完成账号和计划归属隔离；同一个时间戳不是同一用户的身份凭证。
++
++## 串接顺序与未完成的工作
++
++```text
++设置转换并检查冲突，失败则先修正
++  → 获取同用户、同计划、同一版本设置下的天气及路线
++  → 统一天气判断，附真实有效期
++  → B05 固定候选 + B06 智能候选
++  → B07 选择较早的有效候选
++  → 保存操作建议（再次检查）
++  → 接入层确认后实际保存
++  → 原调度或未来安卓端执行，取得执行回执
++```
++
++B05 原始结果的有效期为 `null`，必须由适配层补真实元数据；本轮没有改动它。若固定结果赢出，而智能结果提示通勤时间不足，UI 不应只看固定的 `ready` 就宣称一定能按时到达。调用方需保留原智能诊断，结合最终叫醒与 `desiredWakeAt` 计算剩余差值，再展示提醒；本轮没有修改 B07 重新计算最终合并后的通勤缺口。
++
++尚未接 UI、真实接口、后台定时、用户数据库、微信提醒或安卓响铃。环境音本轮只检查时间冲突，没有实现新增音频能力。步数关铃不在本次范围。离线场景通过不代表手机后台可靠性或供应商认证通过。
++
++## 测试与交付
++
++本轮 43 项测试通过，前次 B05+B07 共 25 项仍通过，累计独立模块测试 68 项。完整 `npm test` 为 85 项：83 通过，原有两个 HTTP 测试因当前沙箱不能监听 `127.0.0.1` 报 `listen EPERM`，不能宣称全量通过。没有新增依赖或修改锁文件。
++
++本轮四份测试：
++
++```sh
++node --test tests/smartAdvance.test.js tests/alarmTiming.test.js tests/alarmWrite.test.js tests/commuteFlow.test.js
++```
++
++`commuteFlow.test.js` 依赖前次 B05/B07 模块，累计包已经包含它们；没有先合入前次包时，优先使用累计包。所有场景使用固定测试数据，不访问网络或实际保存。
++
++- **本轮增量包/补丁**：三个模块、四份测试、本文档，共八个新增文件；需要已存在 B05/B07 才能运行串联测试。
++- **累计新增包/补丁**：包含 B05、B07 和本轮内容，共十四个新增文件，供从原仓库开始审查。B05/B07 内容与前次完全一致。
++
++在真正仓库根目录先执行 `git apply --check /path/to/补丁文件.patch`。如果提示同名文件已存在，选择匹配当前进度的增量补丁，不要用覆盖解压解决。审查后再应用并运行测试；本地下载快照的 Git 历史不应合并到上游。
++
++三人接入时建议：B 对齐天气/路线数据与候选契约；A 连接设置问题、候选与缺口展示；C 接实际保存、归属迁移、幂等与调度。这里的文件已经实现独立逻辑，实际页面和存储接入还需要完成。
+diff --git a/src/alarmTiming.js b/src/alarmTiming.js
+new file mode 100644
+index 0000000..ac0c0f8
+--- /dev/null
++++ b/src/alarmTiming.js
+@@ -0,0 +1,26 @@
++// 仅检查时间关系；HH:mm、日期及用户时区需由调用方转换成完整时间戳。
++export function checkAlarmTiming(options = {}) {
++  const { baseAlarmAt, recheckAt, fixedEnabled, smartEnabled, fixedMinutes,
++    maxAdvance, ambientEnabled = false, ambientOffset,
++    fallback = '保留基础闹钟' } = options ?? {};
++  const issues = [];
++  const warnings = [];
++  const isTime = value => Number.isSafeInteger(value) && Number.isFinite(new Date(value).getTime());
++  const issue = (code, message) => issues.push({ code, message });
++  if ([fixedEnabled, smartEnabled, ambientEnabled].some(value => typeof value !== 'boolean')) issue('invalid_switch', '模式和环境音开关必须是布尔值。');
++  if (!fixedEnabled && !smartEnabled) issue('no_mode', '请至少开启一种提前模式。');
++  if (!isTime(baseAlarmAt) || !isTime(recheckAt)) issue('invalid_time', '基础与复查时间必须是包含日期的有效毫秒时间戳。');
++  for (const [enabled, minutes] of [[fixedEnabled, fixedMinutes], [smartEnabled, maxAdvance]]) {
++    if (enabled === true && (!Number.isInteger(minutes) || minutes < 0 || minutes > 240)) issue('invalid_minutes', '已开启模式的提前分钟需为 0 到 240 的整数。');
++  }
++  if (ambientEnabled === true && (!Number.isInteger(ambientOffset) || ambientOffset < 1 || ambientOffset > 60)) issue('invalid_ambient_offset', '铃前环境音应提前 1 到 60 整数分钟。');
++  if (!['保留基础闹钟', '仅按固定模式'].includes(fallback)) issue('invalid_fallback', '备用策略无效。');
++  if (fallback === '仅按固定模式' && fixedEnabled !== true) issue('fixed_fallback_disabled', '固定模式未开启，不能作为备用方式。');
++  if (smartEnabled === true && fixedEnabled === false) warnings.push({ code: 'smart_without_fixed', message: '建议同时开启固定模式作为备用；仍可只使用智能模式。' });
++  if (issues.length) return { ok: false, earliestAlarmAt: null, earliestSoundAt: null, issues, warnings };
++  const earliestAlarmAt = baseAlarmAt - Math.max(fixedEnabled ? fixedMinutes : 0, smartEnabled ? maxAdvance : 0) * 60000;
++  const earliestSoundAt = earliestAlarmAt - (ambientEnabled ? ambientOffset * 60000 : 0);
++  if (!isTime(earliestSoundAt)) issue('invalid_result_time', '最早发声时间超出有效日期范围。');
++  else if (recheckAt >= earliestSoundAt) issue('recheck_too_late', '复查必须早于最早可能发声时间；备用选项不能替代有效的提前计算。');
++  return { ok: issues.length === 0, earliestAlarmAt, earliestSoundAt, issues, warnings };
++}
+diff --git a/src/alarmWrite.js b/src/alarmWrite.js
+new file mode 100644
+index 0000000..47f7cd9
+--- /dev/null
++++ b/src/alarmWrite.js
+@@ -0,0 +1,47 @@
++// 返回保存操作建议；实际持久化、唯一约束和设备执行由调用方实现。
++export function suggestAlarmWrite(options = {}) {
++  const { mergeResult, alarms, baseAlarmId, commutePlanId, now } = options ?? {};
++  const response = (action, reason, extra = {}) => ({ action, reason, targetId: null, patch: null, idempotencyKey: null, ...extra });
++  if (mergeResult?.action !== 'suggest') return response('keep_existing', '没有新候选，本次不写入或删除。');
++  const isTime = value => Number.isSafeInteger(value) && Number.isFinite(new Date(value).getTime());
++  const isId = value => typeof value === 'string' && value.trim().length > 0;
++  if (!isTime(now) || !Array.isArray(alarms) || !isId(baseAlarmId) || !isId(commutePlanId)) return response('blocked', '时间、闹钟列表或计划归属无效。');
++  const ids = alarms.map(alarm => alarm?.id).filter(isId);
++  if (new Set(ids).size !== ids.length) return response('blocked', '现有闹钟包含重复 ID，需先处理记录冲突。');
++  const base = alarms.find(alarm => alarm?.id === baseAlarmId);
++  const candidate = mergeResult.candidate;
++  if (!base || base.enabled !== true || base.planKind === 'primary' || !isTime(base.at) || base.at <= now) return response('blocked', '基础闹钟不存在、关闭、到期或不是独立基础闹钟。');
++  const capped = mergeResult.selectedMode === 'smart' && candidate?.status === 'capped'
++    && Number.isFinite(candidate.gapMinutes) && candidate.gapMinutes > 0;
++  if (!['fixed', 'smart'].includes(mergeResult.selectedMode) || !candidate
++    || mergeResult.status !== candidate.status || (candidate.status !== 'ready' && !capped)
++    || candidate.baseAlarmAt !== base.at
++    || !isTime(candidate.wakeAt) || candidate.wakeAt <= now || candidate.wakeAt >= base.at
++    || !isTime(candidate.validUntil) || candidate.validUntil <= now) {
++    return response('blocked', '候选已失效、待确认，或基础闹钟时间发生变化；请重新计算。');
++  }
++  const primary = alarms.filter(alarm => alarm?.planKind === 'primary');
++  if (primary.some(alarm => !isId(alarm.commutePlanId))) return response('blocked', '存在未标明通勤计划归属的旧主要闹钟，需先完成迁移。');
++  const matches = primary.filter(alarm => alarm.commutePlanId === commutePlanId);
++  if (matches.length > 1 || (matches[0] && !isId(matches[0].id))) return response('blocked', '同一计划的主要闹钟记录冲突，不能自动选择或删除。');
++  const existing = matches[0];
++  const idempotencyKey = JSON.stringify([commutePlanId, baseAlarmId, base.at]);
++  const target = { targetId: existing?.id ?? null, idempotencyKey };
++  if (existing?.state === 'ringing') return response('blocked', '主要闹钟正在响铃，暂不覆盖。', target);
++  if (existing?.enabled === true && isTime(existing.at) && existing.at <= now) return response('blocked', '已有启用的主要闹钟已到期，需先由调度处理，不能重置为更晚时间。', target);
++  if (existing?.enabled === true && existing.baseAlarmId === baseAlarmId && existing.baseAlarmAt === base.at && isTime(existing.at)
++    && existing.at > now && existing.at < candidate.wakeAt) {
++    return response('keep_existing', '已有同次主要闹钟更早，本次不延后。', target);
++  }
++  const patch = {
++    at: candidate.wakeAt, label: existing?.label ?? '主要提前唤醒',
++    enabled: true, repeat: 'once', state: 'armed', planKind: 'primary',
++    commutePlanId, baseAlarmId, baseAlarmAt: base.at,
++    departAt: candidate.departAt ?? null, desiredWakeAt: candidate.desiredWakeAt ?? null,
++    reason: candidate.reason ?? '', source: candidate.source ?? null,
++    validUntil: candidate.validUntil, updatedAt: candidate.updatedAt ?? null,
++    gapMinutes: candidate.gapMinutes ?? null, planStatus: candidate.status,
++  };
++  if (existing && Object.entries(patch).every(([key, value]) => existing[key] === value)) return response('noop', '记录已经一致，无需重复保存。', target);
++  return response(existing ? 'update' : 'create', existing ? '建议更新同一主要闹钟，保留其 ID。' : '建议创建一条主要提前闹钟。', { ...target, patch });
++}
+diff --git a/src/fixedAdvance.js b/src/fixedAdvance.js
+new file mode 100644
+index 0000000..1772700
+--- /dev/null
++++ b/src/fixedAdvance.js
+@@ -0,0 +1,25 @@
++// 仅生成候选；天气触发判断、数据有效期及闹钟保存由调用方负责。
++// baseAlarmAt / wakeAt 为带日期的 Unix 毫秒时间戳，不能传 HH:mm。
++export function calculateFixedCandidate({ baseAlarmAt, fixedEnabled, fixedMinutes, weatherTriggered } = {}) {
++  const validBase = Number.isSafeInteger(baseAlarmAt) && Number.isFinite(new Date(baseAlarmAt).getTime());
++  const result = {
++    baseAlarmAt: validBase ? baseAlarmAt : null,
++    wakeAt: null, departAt: null, reason: '', validUntil: null,
++    gapMinutes: null, status: 'unavailable', source: 'fixed',
++    updatedAt: null, executionState: 'suggested',
++  };
++  if (typeof fixedEnabled !== 'boolean') return { ...result, reason: '固定模式开关无效。' };
++  if (!fixedEnabled) return { ...result, reason: '固定提前模式未开启。' };
++  if (!validBase) return { ...result, reason: '基础闹钟需提供有效的毫秒时间戳。' };
++  if (!Number.isInteger(fixedMinutes) || fixedMinutes < 0 || fixedMinutes > 240) {
++    return { ...result, reason: '固定提前量需为 0 到 240 的整数分钟。' };
++  }
++  if (fixedMinutes === 0) return { ...result, reason: '提前量为零，沿用基础闹钟，不生成重复候选。' };
++  if (typeof weatherTriggered !== 'boolean') {
++    return { ...result, status: 'weather_unknown', reason: '天气触发结果未知，暂不生成固定提前候选。' };
++  }
++  if (!weatherTriggered) return { ...result, reason: '天气未达到触发条件。' };
++  const wakeAt = baseAlarmAt - fixedMinutes * 60000;
++  if (!Number.isFinite(new Date(wakeAt).getTime())) return { ...result, reason: '提前后的时间超出有效日期范围。' };
++  return { ...result, wakeAt, status: 'ready', reason: `天气达到触发条件，按用户设置提前 ${fixedMinutes} 分钟。` };
++}
+diff --git a/src/mergeAdvance.js b/src/mergeAdvance.js
+new file mode 100644
+index 0000000..a110ec7
+--- /dev/null
++++ b/src/mergeAdvance.js
+@@ -0,0 +1,37 @@
++// 只选择建议，不创建、更新或删除闹钟。所有时间均为 Unix 毫秒。
++export function mergeAdvanceCandidates(options = {}) {
++  const { baseAlarmAt, fixedEnabled, smartEnabled, fixedCandidate, smartCandidate, now } = options ?? {};
++  const isTime = value => Number.isSafeInteger(value) && Number.isFinite(new Date(value).getTime());
++  const unavailable = {
++    status: 'unavailable', candidate: null, selectedMode: null,
++    action: 'keep_existing', reason: '没有有效新候选，保留基础闹钟及仍有效的已有计划。',
++  };
++  if (!isTime(now) || !isTime(baseAlarmAt) || baseAlarmAt <= now) {
++    return { ...unavailable, reason: '当前时间或基础时间无效，或基础闹钟已经到期；暂不更新。' };
++  }
++  let selected = null;
++  let selectedMode = null;
++  for (const [mode, enabled, candidate] of [
++    ['fixed', fixedEnabled, fixedCandidate], ['smart', smartEnabled, smartCandidate],
++  ]) {
++    if (enabled !== true || !candidate || candidate.baseAlarmAt !== baseAlarmAt) continue;
++    const capped = mode === 'smart' && candidate.status === 'capped'
++      && Number.isFinite(candidate.gapMinutes) && candidate.gapMinutes > 0;
++    if (candidate.status !== 'ready' && !capped) continue;
++    if (!isTime(candidate.wakeAt) || candidate.wakeAt <= now || candidate.wakeAt >= baseAlarmAt) continue;
++    if (!isTime(candidate.validUntil) || candidate.validUntil <= now) continue;
++    // 固定先遍历；并列时保持固定，重复计算不会来回切换。
++    if (!selected || candidate.wakeAt < selected.wakeAt) {
++      selected = candidate;
++      selectedMode = mode;
++    }
++  }
++  if (!selected) return unavailable;
++  return {
++    status: selected.status, selectedMode, action: 'suggest',
++    candidate: { ...selected, executionState: 'suggested' },
++    reason: selected.status === 'capped'
++      ? '已选择较早的有效候选，但智能提前受上限限制，仍存在时间缺口。'
++      : '已选择开启模式中较早的有效候选；基础闹钟保持独立。',
++  };
++}
+diff --git a/src/smartAdvance.js b/src/smartAdvance.js
+new file mode 100644
+index 0000000..7f4c5c6
+--- /dev/null
++++ b/src/smartAdvance.js
+@@ -0,0 +1,42 @@
++// 只消费已验证的天气/路线数据，不查询接口、不写入闹钟。
++export function calculateSmartCandidate(options = {}) {
++  const { baseAlarmAt, arrivalAt, durationMinutes, preparation, buffer, extra,
++    maxAdvance, smartEnabled, weatherTriggered, validUntil, updatedAt, now } = options ?? {};
++  const isTime = value => Number.isSafeInteger(value) && Number.isFinite(new Date(value).getTime());
++  const result = {
++    baseAlarmAt: isTime(baseAlarmAt) ? baseAlarmAt : null,
++    wakeAt: null, desiredWakeAt: null, departAt: null, gapMinutes: null,
++    status: 'unavailable', source: 'smart', reason: '',
++    validUntil: null, updatedAt: null, executionState: 'suggested',
++  };
++  if (smartEnabled !== true) return { ...result, reason: '智能模式未开启或开关无效。' };
++  if (!isTime(now) || !isTime(baseAlarmAt) || !isTime(arrivalAt) || baseAlarmAt <= now || arrivalAt <= now) {
++    return { ...result, reason: '需要有效且尚未到期的基础及到达时间。' };
++  }
++  if (typeof weatherTriggered !== 'boolean') return { ...result, status: 'weather_unknown', reason: '天气触发结果未知。' };
++  if (!weatherTriggered) return { ...result, reason: '天气未达到触发条件。' };
++  if (!Number.isInteger(durationMinutes) || durationMinutes < 0 || durationMinutes > 1440) {
++    return { ...result, status: 'route_failed', reason: '缺少有效路线耗时；不能假定零分钟。' };
++  }
++  if ([preparation, buffer, extra, maxAdvance].some(value => !Number.isInteger(value) || value < 0 || value > 240)) {
++    return { ...result, reason: '准备、余量、额外准备和智能上限需为 0 到 240 的整数分钟。' };
++  }
++  if (!isTime(validUntil) || validUntil <= now || !isTime(updatedAt) || updatedAt > now) {
++    return { ...result, reason: '数据有效期或更新时间缺失、过期或无效。' };
++  }
++  const departAt = arrivalAt - (durationMinutes + buffer) * 60000;
++  const desiredWakeAt = departAt - (preparation + extra) * 60000;
++  if (!isTime(departAt) || !isTime(desiredWakeAt)) return { ...result, reason: '倒推后的时间超出有效范围。' };
++  const calculated = { ...result, desiredWakeAt, departAt, validUntil, updatedAt };
++  if (desiredWakeAt >= baseAlarmAt) return { ...calculated, reason: '无需提前，保留基础闹钟。' };
++  const wakeAt = Math.max(desiredWakeAt, baseAlarmAt - maxAdvance * 60000);
++  if (!isTime(wakeAt) || wakeAt <= now) return { ...calculated, reason: '建议叫醒时间已经错过，暂不创建过去闹钟。' };
++  const gapMinutes = Math.ceil((wakeAt - desiredWakeAt) / 60000);
++  return {
++    ...calculated, wakeAt: wakeAt < baseAlarmAt ? wakeAt : null, gapMinutes,
++    status: gapMinutes > 0 ? 'capped' : 'ready',
++    reason: gapMinutes > 0
++      ? `受用户智能提前上限限制，距满足到达目标仍差约 ${gapMinutes} 分钟。`
++      : '按提供的交通耗时、准备时间与到达余量倒推智能提前候选。',
++  };
++}
+diff --git a/tests/alarmTiming.test.js b/tests/alarmTiming.test.js
+new file mode 100644
+index 0000000..36e568f
+--- /dev/null
++++ b/tests/alarmTiming.test.js
+@@ -0,0 +1,81 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { checkAlarmTiming } from '../src/alarmTiming.js';
++
++const settings = Object.freeze({
++  baseAlarmAt: Date.parse('2026-10-30T07:00:00+08:00'),
++  recheckAt: Date.parse('2026-10-30T05:30:00+08:00'),
++  fixedEnabled: true, smartEnabled: true, fixedMinutes: 30, maxAdvance: 60,
++  ambientEnabled: true, ambientOffset: 5, fallback: '保留基础闹钟',
++});
++
++test('两个模式和环境音一起计算最早发声时间', () => {
++  const result = checkAlarmTiming(settings);
++  assert.equal(result.ok, true);
++  assert.equal(result.earliestAlarmAt, Date.parse('2026-10-30T06:00:00+08:00'));
++  assert.equal(result.earliestSoundAt, Date.parse('2026-10-30T05:55:00+08:00'));
++  assert.deepEqual(result.issues, []);
++});
++
++test('固定量可以大于智能上限，并按固定量检查复查时间', () => {
++  const result = checkAlarmTiming({ ...settings, fixedMinutes: 90, recheckAt: Date.parse('2026-10-30T05:00:00+08:00') });
++  assert.equal(result.ok, true);
++  assert.equal(result.earliestSoundAt, Date.parse('2026-10-30T05:25:00+08:00'));
++});
++
++test('复查等于或晚于环境音开始时间均报告冲突，备用策略不能掩盖', () => {
++  for (const fallback of ['保留基础闹钟', '仅按固定模式']) {
++    const result = checkAlarmTiming({ ...settings, recheckAt: Date.parse('2026-10-30T05:55:00+08:00'), fallback });
++    assert.equal(result.ok, false);
++    assert.ok(result.issues.some(issue => issue.code === 'recheck_too_late'));
++  }
++});
++
++test('仅固定模式也需要在发声前复查，关闭环境音不减偏移', () => {
++  const result = checkAlarmTiming({ ...settings, smartEnabled: false, ambientEnabled: false, recheckAt: Date.parse('2026-10-30T06:30:00+08:00') });
++  assert.equal(result.earliestSoundAt, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(result.ok, false);
++});
++
++test('仅智能给绑定固定的非阻断提醒，未开启固定不能选固定备用', () => {
++  const result = checkAlarmTiming({ ...settings, fixedEnabled: false });
++  assert.equal(result.ok, true);
++  assert.ok(result.warnings.some(issue => issue.code === 'smart_without_fixed'));
++  const invalid = checkAlarmTiming({ ...settings, fixedEnabled: false, fallback: '仅按固定模式' });
++  assert.equal(invalid.ok, false);
++  assert.ok(invalid.issues.some(issue => issue.code === 'fixed_fallback_disabled'));
++});
++
++test('无模式、非布尔开关、非法时间/分钟/备用设置均拒绝', () => {
++  for (const changes of [
++    { fixedEnabled: false, smartEnabled: false }, { fixedEnabled: 'true' },
++    { baseAlarmAt: null }, { recheckAt: '05:30' }, { fixedMinutes: -1 },
++    { maxAdvance: 241 }, { ambientOffset: 0 }, { ambientOffset: 61 },
++    { ambientEnabled: 'true' }, { fallback: '随便' },
++  ]) {
++    const result = checkAlarmTiming({ ...settings, ...changes });
++    assert.equal(result.ok, false);
++    assert.ok(result.issues.length > 0);
++  }
++});
++
++test('未开启模式的旧分钟配置不参与，关闭环境音时也不验证旧偏移', () => {
++  const result = checkAlarmTiming({ ...settings, smartEnabled: false, maxAdvance: null, ambientEnabled: false, ambientOffset: null });
++  assert.equal(result.ok, true);
++  assert.equal(result.earliestSoundAt, Date.parse('2026-10-30T06:30:00+08:00'));
++});
++
++test('跨日最早发声必须与前一晚的复查时间比较', () => {
++  const result = checkAlarmTiming({ ...settings,
++    baseAlarmAt: Date.parse('2026-10-30T00:10:00+08:00'),
++    recheckAt: Date.parse('2026-10-29T22:00:00+08:00'),
++  });
++  assert.equal(result.ok, true);
++  assert.equal(result.earliestSoundAt, Date.parse('2026-10-29T23:05:00+08:00'));
++});
++
++test('检查不改变设置，重复结果一致', () => {
++  const before = structuredClone(settings);
++  assert.deepEqual(checkAlarmTiming(settings), checkAlarmTiming(settings));
++  assert.deepEqual(settings, before);
++});
+diff --git a/tests/alarmWrite.test.js b/tests/alarmWrite.test.js
+new file mode 100644
+index 0000000..e632689
+--- /dev/null
++++ b/tests/alarmWrite.test.js
+@@ -0,0 +1,141 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { suggestAlarmWrite } from '../src/alarmWrite.js';
++
++const now = Date.parse('2026-10-30T05:00:00+08:00');
++const base = Object.freeze({ id: 'base-1', at: Date.parse('2026-10-30T07:00:00+08:00'), enabled: true, repeat: 'daily', label: '基础闹钟' });
++const candidate = Object.freeze({
++  baseAlarmAt: base.at, wakeAt: Date.parse('2026-10-30T06:30:00+08:00'),
++  validUntil: Date.parse('2026-10-30T05:15:00+08:00'), updatedAt: now,
++  status: 'ready', source: 'fixed', departAt: null, gapMinutes: null,
++  reason: '固定提前30分钟', executionState: 'suggested',
++});
++const mergeResult = Object.freeze({ action: 'suggest', status: 'ready', selectedMode: 'fixed', candidate });
++const input = Object.freeze({ alarms: Object.freeze([base]), baseAlarmId: base.id, commutePlanId: 'commute-1', mergeResult, now });
++const existing = Object.freeze({ id: 'primary-1', planKind: 'primary', commutePlanId: 'commute-1', baseAlarmId: base.id, baseAlarmAt: base.at, at: Date.parse('2026-10-30T06:40:00+08:00'), label: '我的提前闹钟', enabled: true, state: 'armed' });
++
++test('首次只返回创建补丁，不生成ID、不写入或修改基础闹钟', () => {
++  const result = suggestAlarmWrite(input);
++  assert.equal(result.action, 'create');
++  assert.equal(result.targetId, null);
++  assert.equal(result.patch.id, undefined);
++  assert.equal(result.patch.at, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(result.patch.planKind, 'primary');
++  assert.equal(result.patch.baseAlarmId, base.id);
++  assert.equal(result.patch.commutePlanId, 'commute-1');
++  assert.equal(result.patch.repeat, 'once');
++  assert.equal(input.alarms.length, 1);
++  assert.equal(base.at, Date.parse('2026-10-30T07:00:00+08:00'));
++});
++
++test('已有同一计划时复用原ID并保留用户名称', () => {
++  const result = suggestAlarmWrite({ ...input, alarms: [base, existing] });
++  assert.equal(result.action, 'update');
++  assert.equal(result.targetId, 'primary-1');
++  assert.equal(result.patch.at, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(result.patch.label, '我的提前闹钟');
++});
++
++test('同一补丁模拟保存后再次请求是noop，不追加第二个主要闹钟', () => {
++  const first = suggestAlarmWrite(input);
++  const saved = { ...first.patch, id: 'saved-1' };
++  const second = suggestAlarmWrite({ ...input, alarms: [base, saved] });
++  assert.equal(second.action, 'noop');
++  assert.equal(second.targetId, 'saved-1');
++  assert.equal(second.patch, null);
++  assert.equal(first.idempotencyKey, second.idempotencyKey);
++});
++
++test('无新候选时只保留，不删除旧计划', () => {
++  const result = suggestAlarmWrite({ ...input, alarms: [base, existing], mergeResult: { action: 'keep_existing', candidate: null } });
++  assert.equal(result.action, 'keep_existing');
++  assert.equal(result.patch, null);
++});
++
++test('已有同次且启用的更早主要闹钟不被延后', () => {
++  const result = suggestAlarmWrite({ ...input, alarms: [base, { ...existing, at: Date.parse('2026-10-30T06:00:00+08:00') }] });
++  assert.equal(result.action, 'keep_existing');
++  assert.equal(result.targetId, existing.id);
++  assert.equal(result.patch, null);
++});
++
++test('用户更换了基础闹钟ID时更新绑定，不把相同钟点误认作同一基础', () => {
++  const result = suggestAlarmWrite({ ...input, alarms: [base, {
++    ...existing, baseAlarmId: 'old-base', at: Date.parse('2026-10-30T06:00:00+08:00'),
++  }] });
++  assert.equal(result.action, 'update');
++  assert.equal(result.patch.baseAlarmId, 'base-1');
++});
++
++test('保存前再次检查新鲜度、未来时间、状态及基础时间匹配', () => {
++  for (const changes of [
++    { validUntil: now }, { wakeAt: now }, { wakeAt: base.at },
++    { baseAlarmAt: base.at + 86400000 }, { status: 'needs_confirmation' },
++  ]) {
++    const result = suggestAlarmWrite({ ...input, mergeResult: { ...mergeResult, candidate: { ...candidate, ...changes } } });
++    assert.equal(result.action, 'blocked');
++    assert.equal(result.patch, null);
++  }
++});
++
++test('基础不存在、关闭、归属非法或时间已改变时不写入', () => {
++  for (const changes of [
++    { alarms: [] }, { alarms: [{ ...base, enabled: false }] },
++    { alarms: [{ ...base, at: base.at + 60000 }] }, { alarms: [{ ...base, planKind: 'primary' }] },
++    { baseAlarmId: '' }, { commutePlanId: '' }, { now: null }, { alarms: null },
++  ]) {
++    assert.equal(suggestAlarmWrite({ ...input, ...changes }).action, 'blocked');
++  }
++});
++
++test('同计划多条主要闹钟、重复ID或未迁移归属的旧主要闹钟阻断', () => {
++  for (const alarms of [
++    [base, existing, { ...existing, id: 'primary-2' }],
++    [base, { ...base }],
++    [base, existing, { id: existing.id, at: base.at }],
++    [base, { id: 'legacy-1', planKind: 'primary', at: candidate.wakeAt }],
++  ]) {
++    const result = suggestAlarmWrite({ ...input, alarms });
++    assert.equal(result.action, 'blocked');
++    assert.equal(result.patch, null);
++  }
++});
++
++test('其他计划主要闹钟不被更新', () => {
++  const other = { ...existing, commutePlanId: 'other-plan' };
++  const result = suggestAlarmWrite({ ...input, alarms: [base, other] });
++  assert.equal(result.action, 'create');
++  assert.equal(result.targetId, null);
++  assert.equal(other.at, Date.parse('2026-10-30T06:40:00+08:00'));
++});
++
++test('正在响铃的主要闹钟不被重新设为armed', () => {
++  const result = suggestAlarmWrite({ ...input, alarms: [base, { ...existing, state: 'ringing' }] });
++  assert.equal(result.action, 'blocked');
++  assert.equal(result.patch, null);
++});
++
++test('刚到期或已过期但仍启用的主要闹钟等待调度处理，不重置成未来闹钟', () => {
++  for (const at of [now, now - 60000]) {
++    const result = suggestAlarmWrite({ ...input, alarms: [base, { ...existing, at }] });
++    assert.equal(result.action, 'blocked');
++    assert.equal(result.patch, null);
++  }
++});
++
++test('智能capped结果保留缺口，不能借保存伪称完整满足通勤', () => {
++  const result = suggestAlarmWrite({ ...input, mergeResult: {
++    ...mergeResult, status: 'capped', selectedMode: 'smart',
++    candidate: { ...candidate, status: 'capped', gapMinutes: 20, source: 'smart' },
++  } });
++  assert.equal(result.action, 'create');
++  assert.equal(result.patch.planStatus, 'capped');
++  assert.equal(result.patch.gapMinutes, 20);
++});
++
++test('重复计算一致且不改变任何输入记录', () => {
++  const args = Object.freeze({ ...input, alarms: Object.freeze([base, existing]) });
++  const before = structuredClone(args);
++  assert.deepEqual(suggestAlarmWrite(args), suggestAlarmWrite(args));
++  assert.deepEqual(args, before);
++});
+diff --git a/tests/commuteFlow.test.js b/tests/commuteFlow.test.js
+new file mode 100644
+index 0000000..a6b8123
+--- /dev/null
++++ b/tests/commuteFlow.test.js
+@@ -0,0 +1,126 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { calculateFixedCandidate } from '../src/fixedAdvance.js';
++import { calculateSmartCandidate } from '../src/smartAdvance.js';
++import { mergeAdvanceCandidates } from '../src/mergeAdvance.js';
++import { checkAlarmTiming } from '../src/alarmTiming.js';
++import { suggestAlarmWrite } from '../src/alarmWrite.js';
++
++const sample = Object.freeze({
++  baseAlarmAt: Date.parse('2026-10-30T07:00:00+08:00'),
++  arrivalAt: Date.parse('2026-10-30T08:00:00+08:00'),
++  now: Date.parse('2026-10-30T05:00:00+08:00'),
++  updatedAt: Date.parse('2026-10-30T05:00:00+08:00'),
++  validUntil: Date.parse('2026-10-30T05:15:00+08:00'),
++  fixedEnabled: true, smartEnabled: true, fixedMinutes: 30, maxAdvance: 60,
++  durationMinutes: 60, preparation: 30, buffer: 10, extra: 10, weatherTriggered: true,
++});
++
++// 离线场景的接入层示例，不请求天气，也不执行实际保存。
++function calculate(changes = {}, previous) {
++  const args = { ...sample, ...changes };
++  const base = { id: 'base-1', at: args.baseAlarmAt, enabled: true, repeat: 'daily' };
++  const rawFixed = calculateFixedCandidate(args);
++  const fixedCandidate = rawFixed.status === 'ready'
++    ? { ...rawFixed, validUntil: args.validUntil, updatedAt: args.updatedAt } : rawFixed;
++  const smartCandidate = calculateSmartCandidate(args);
++  const merged = mergeAdvanceCandidates({ ...args, fixedCandidate, smartCandidate });
++  const alarms = previous ?? [base];
++  const operation = suggestAlarmWrite({ mergeResult: merged, alarms, baseAlarmId: base.id, commutePlanId: 'commute-1', now: args.now });
++  return { args, fixedCandidate, smartCandidate, merged, operation, alarms };
++}
++
++test('设置检查 → 两种候选 → 合并 → 单条创建建议，基础07:00仍独立', () => {
++  const timing = checkAlarmTiming({ ...sample, recheckAt: sample.now, ambientEnabled: true, ambientOffset: 5 });
++  assert.equal(timing.ok, true);
++  const flow = calculate();
++  assert.equal(flow.fixedCandidate.wakeAt, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(flow.smartCandidate.wakeAt, Date.parse('2026-10-30T06:10:00+08:00'));
++  assert.equal(flow.operation.action, 'create');
++  assert.equal(flow.operation.patch.at, Date.parse('2026-10-30T06:10:00+08:00'));
++  assert.equal(flow.alarms.length, 1);
++  assert.equal(flow.alarms[0].at, Date.parse('2026-10-30T07:00:00+08:00'));
++});
++
++test('固定或智能单独开启均能完成离线计算链路', () => {
++  const fixed = calculate({ smartEnabled: false });
++  assert.equal(fixed.operation.patch.at, Date.parse('2026-10-30T06:30:00+08:00'));
++  const smart = calculate({ fixedEnabled: false });
++  assert.equal(smart.operation.patch.at, Date.parse('2026-10-30T06:10:00+08:00'));
++});
++
++test('路线失败时固定仍可用，不要求高德先成功', () => {
++  const flow = calculate({ durationMinutes: null });
++  assert.equal(flow.smartCandidate.status, 'route_failed');
++  assert.equal(flow.merged.selectedMode, 'fixed');
++  assert.equal(flow.operation.action, 'create');
++  const onlySmart = calculate({ fixedEnabled: false, durationMinutes: null });
++  assert.equal(onlySmart.operation.action, 'keep_existing');
++});
++
++test('天气未知、未触发或数据过期不创建额外闹钟', () => {
++  for (const changes of [{ weatherTriggered: null }, { weatherTriggered: false }, { validUntil: sample.now }]) {
++    const flow = calculate(changes);
++    assert.equal(flow.operation.action, 'keep_existing');
++    assert.equal(flow.operation.patch, null);
++    assert.equal(flow.alarms.length, 1);
++  }
++});
++
++test('智能达到上限时保留缺口；固定更早时仍选固定', () => {
++  const smartOnly = calculate({ fixedEnabled: false, maxAdvance: 30 });
++  assert.equal(smartOnly.operation.patch.at, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(smartOnly.operation.patch.planStatus, 'capped');
++  assert.equal(smartOnly.operation.patch.gapMinutes, 20);
++  const both = calculate({ maxAdvance: 20 });
++  assert.equal(both.smartCandidate.gapMinutes, 30);
++  assert.equal(both.merged.selectedMode, 'fixed');
++  assert.equal(both.operation.patch.at, Date.parse('2026-10-30T06:30:00+08:00'));
++});
++
++test('智能上限0且没有固定时保留基础，不生成同时间重复铃', () => {
++  const flow = calculate({ fixedEnabled: false, maxAdvance: 0 });
++  assert.equal(flow.smartCandidate.gapMinutes, 50);
++  assert.equal(flow.operation.action, 'keep_existing');
++});
++
++test('模拟保存一次后重复计算无需新增，最终仍是一条基础加一条主要闹钟', () => {
++  const first = calculate();
++  const saved = { ...first.operation.patch, id: 'primary-1' };
++  const alarms = Object.freeze([Object.freeze(first.alarms[0]), Object.freeze(saved)]);
++  const second = calculate({}, alarms);
++  assert.equal(second.operation.action, 'noop');
++  assert.equal(second.operation.targetId, 'primary-1');
++  assert.equal(alarms.length, 2);
++  const unknown = calculate({ weatherTriggered: null }, alarms);
++  assert.equal(unknown.operation.action, 'keep_existing');
++  assert.equal(alarms[1].at, Date.parse('2026-10-30T06:10:00+08:00'));
++});
++
++test('页面恢复后先重算，也不能把尚未由调度处理的06:00旧铃延至06:30', () => {
++  const alarms = Object.freeze([
++    Object.freeze({ id: 'base-1', at: sample.baseAlarmAt, enabled: true }),
++    Object.freeze({ id: 'primary-1', planKind: 'primary', commutePlanId: 'commute-1',
++      baseAlarmId: 'base-1', baseAlarmAt: sample.baseAlarmAt,
++      at: Date.parse('2026-10-30T06:00:00+08:00'), enabled: true, state: 'armed' }),
++  ]);
++  const flow = calculate({ smartEnabled: false,
++    now: Date.parse('2026-10-30T06:10:00+08:00'), updatedAt: Date.parse('2026-10-30T06:10:00+08:00'),
++    validUntil: Date.parse('2026-10-30T06:25:00+08:00'),
++  }, alarms);
++  assert.equal(flow.merged.candidate.wakeAt, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(flow.operation.action, 'blocked');
++  assert.equal(flow.operation.patch, null);
++  assert.equal(alarms[1].at, Date.parse('2026-10-30T06:00:00+08:00'));
++});
++
++test('跨午夜计算、上限、合并和保存建议使用完整日期', () => {
++  const flow = calculate({
++    now: Date.parse('2026-10-29T22:00:00+08:00'), updatedAt: Date.parse('2026-10-29T22:00:00+08:00'),
++    validUntil: Date.parse('2026-10-29T22:15:00+08:00'),
++    baseAlarmAt: Date.parse('2026-10-30T00:30:00+08:00'), arrivalAt: Date.parse('2026-10-30T01:00:00+08:00'),
++  });
++  assert.equal(flow.operation.patch.at, Date.parse('2026-10-29T23:30:00+08:00'));
++  assert.equal(flow.operation.patch.baseAlarmAt, Date.parse('2026-10-30T00:30:00+08:00'));
++  assert.equal(flow.operation.patch.gapMinutes, 20);
++});
+diff --git a/tests/fixedAdvance.test.js b/tests/fixedAdvance.test.js
+new file mode 100644
+index 0000000..0ac761d
+--- /dev/null
++++ b/tests/fixedAdvance.test.js
+@@ -0,0 +1,88 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { calculateFixedCandidate } from '../src/fixedAdvance.js';
++
++const baseAlarmAt = Date.parse('2026-10-30T07:00:00+08:00');
++const input = { baseAlarmAt, fixedEnabled: true, fixedMinutes: 30, weatherTriggered: true };
++
++test('不需要路线：基础 07:00，触发后固定提前到 06:30', () => {
++  const result = calculateFixedCandidate(input);
++  assert.equal(result.status, 'ready');
++  assert.equal(result.wakeAt, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(result.baseAlarmAt, baseAlarmAt);
++  assert.equal(result.source, 'fixed');
++  assert.equal(result.executionState, 'suggested');
++  assert.equal(result.departAt, null);
++  assert.equal(result.validUntil, null);
++  assert.equal(result.updatedAt, null);
++  assert.equal(result.gapMinutes, null);
++});
++
++test('关闭固定模式或者未触发天气时不生成候选', () => {
++  for (const changes of [{ fixedEnabled: false }, { weatherTriggered: false }]) {
++    const result = calculateFixedCandidate({ ...input, ...changes });
++    assert.equal(result.status, 'unavailable');
++    assert.equal(result.wakeAt, null);
++    assert.equal(result.baseAlarmAt, baseAlarmAt);
++  }
++});
++
++test('天气未知或缺失时明确标记未知，不能当作未下雨', () => {
++  for (const weatherTriggered of [null, undefined]) {
++    const result = calculateFixedCandidate({ ...input, weatherTriggered });
++    assert.equal(result.status, 'weather_unknown');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('提前零分钟时不生成与基础闹钟重复的候选', () => {
++  const result = calculateFixedCandidate({ ...input, fixedMinutes: 0 });
++  assert.equal(result.status, 'unavailable');
++  assert.equal(result.wakeAt, null);
++});
++
++test('00:10 提前 30 分钟正确落在前一天 23:40', () => {
++  const result = calculateFixedCandidate({ ...input, baseAlarmAt: Date.parse('2026-10-30T00:10:00+08:00') });
++  assert.equal(result.wakeAt, Date.parse('2026-10-29T23:40:00+08:00'));
++});
++
++test('固定提前不受智能上限限制，240 分钟也能独立计算', () => {
++  const result = calculateFixedCandidate({ ...input, fixedMinutes: 240, maxAdvance: 10 });
++  assert.equal(result.status, 'ready');
++  assert.equal(result.wakeAt, Date.parse('2026-10-30T03:00:00+08:00'));
++});
++
++test('非法分钟数不生成候选，不把空值或字符串隐式转换为分钟', () => {
++  for (const fixedMinutes of [-1, 241, 1.5, NaN, Infinity, null, undefined, '30', '']) {
++    const result = calculateFixedCandidate({ ...input, fixedMinutes });
++    assert.equal(result.status, 'unavailable');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('非法基础时间不生成候选，毫秒时间戳不能误传为时钟文字', () => {
++  for (const baseAlarmAt of [null, undefined, NaN, Infinity, '07:00', '2026-10-30', 8640000000000001]) {
++    const result = calculateFixedCandidate({ ...input, baseAlarmAt });
++    assert.equal(result.status, 'unavailable');
++    assert.equal(result.wakeAt, null);
++    assert.equal(result.baseAlarmAt, null);
++  }
++});
++
++test('非布尔触发值和开关不能通过真值判断意外叫醒用户', () => {
++  for (const changes of [{ weatherTriggered: 'false' }, { weatherTriggered: 60 }, { fixedEnabled: 'false' }, { fixedEnabled: 1 }]) {
++    const result = calculateFixedCandidate({ ...input, ...changes });
++    assert.notEqual(result.status, 'ready');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('重复计算结果一致，不修改输入或基础闹钟', () => {
++  const frozen = Object.freeze({ ...input });
++  const first = calculateFixedCandidate(frozen);
++  const second = calculateFixedCandidate(frozen);
++  assert.deepEqual(first, second);
++  assert.notEqual(first, second);
++  assert.deepEqual(frozen, input);
++  assert.equal(frozen.baseAlarmAt, Date.parse('2026-10-30T07:00:00+08:00'));
++});
+diff --git a/tests/mergeAdvance.test.js b/tests/mergeAdvance.test.js
+new file mode 100644
+index 0000000..e4cf1ef
+--- /dev/null
++++ b/tests/mergeAdvance.test.js
+@@ -0,0 +1,147 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { mergeAdvanceCandidates } from '../src/mergeAdvance.js';
++
++const now = Date.parse('2026-10-30T05:00:00+08:00');
++const baseAlarmAt = Date.parse('2026-10-30T07:00:00+08:00');
++const fixedCandidate = Object.freeze({
++  baseAlarmAt, wakeAt: Date.parse('2026-10-30T06:30:00+08:00'),
++  status: 'ready', reason: '固定提前 30 分钟', source: 'fixed',
++  validUntil: Date.parse('2026-10-30T05:15:00+08:00'),
++  updatedAt: now, departAt: null, gapMinutes: null, executionState: 'suggested',
++});
++const smartCandidate = Object.freeze({
++  ...fixedCandidate, wakeAt: Date.parse('2026-10-30T06:10:00+08:00'),
++  departAt: Date.parse('2026-10-30T07:40:00+08:00'),
++  reason: '通勤耗时与准备时间倒推', source: 'smart',
++});
++const input = Object.freeze({ baseAlarmAt, now, fixedEnabled: true, smartEnabled: true, fixedCandidate, smartCandidate });
++
++test('两种模式取较早时间，只返回一个建议并保留基础时间', () => {
++  const result = mergeAdvanceCandidates(input);
++  assert.equal(result.action, 'suggest');
++  assert.equal(result.status, 'ready');
++  assert.equal(result.selectedMode, 'smart');
++  assert.equal(result.candidate.wakeAt, Date.parse('2026-10-30T06:10:00+08:00'));
++  assert.equal(result.candidate.baseAlarmAt, baseAlarmAt);
++  assert.equal(result.candidate.departAt, Date.parse('2026-10-30T07:40:00+08:00'));
++});
++
++test('固定候选更早时选固定，相同时间也稳定选固定', () => {
++  for (const wakeAt of [Date.parse('2026-10-30T06:00:00+08:00'), smartCandidate.wakeAt]) {
++    const result = mergeAdvanceCandidates({ ...input, fixedCandidate: { ...fixedCandidate, wakeAt } });
++    assert.equal(result.selectedMode, 'fixed');
++    assert.equal(result.candidate.wakeAt, wakeAt);
++  }
++});
++
++test('只开启一种模式时不使用另一模式更早的时间', () => {
++  const fixedOnly = mergeAdvanceCandidates({ ...input, smartEnabled: false });
++  assert.equal(fixedOnly.selectedMode, 'fixed');
++  assert.equal(fixedOnly.candidate.wakeAt, Date.parse('2026-10-30T06:30:00+08:00'));
++  const smartOnly = mergeAdvanceCandidates({ ...input, fixedEnabled: false });
++  assert.equal(smartOnly.selectedMode, 'smart');
++});
++
++test('过期、缺少有效期或无效有效期的较早智能候选不能覆盖固定候选', () => {
++  for (const validUntil of [now - 1, now, null, undefined, NaN, Infinity, '2026-10-30T05:15:00+08:00', 8640000000000001]) {
++    const result = mergeAdvanceCandidates({ ...input, smartCandidate: { ...smartCandidate, validUntil } });
++    assert.equal(result.selectedMode, 'fixed');
++  }
++});
++
++test('未知天气、路线失败、不可用和待确认状态均不参与合并', () => {
++  for (const status of ['weather_unknown', 'route_failed', 'unavailable', 'needs_confirmation', 'approval', undefined]) {
++    const result = mergeAdvanceCandidates({ ...input, smartCandidate: { ...smartCandidate, status } });
++    assert.equal(result.selectedMode, 'fixed');
++  }
++});
++
++test('唤醒时间必须仍在未来且早于基础，不能生成延后或重复基础的闹钟', () => {
++  for (const wakeAt of [now - 1, now, baseAlarmAt, baseAlarmAt + 60000, null, NaN, Infinity, '06:10', 8640000000000001]) {
++    const result = mergeAdvanceCandidates({ ...input, smartCandidate: { ...smartCandidate, wakeAt } });
++    assert.equal(result.selectedMode, 'fixed');
++  }
++});
++
++test('其他日期或其他基础时间的候选不能混入本次计划', () => {
++  const result = mergeAdvanceCandidates({ ...input, smartCandidate: { ...smartCandidate, baseAlarmAt: baseAlarmAt + 86400000 } });
++  assert.equal(result.selectedMode, 'fixed');
++});
++
++test('没有有效候选时明确不更新，不用基础闹钟伪造新候选', () => {
++  for (const changes of [
++    { fixedEnabled: false, smartEnabled: false },
++    { fixedCandidate: null, smartCandidate: null },
++    { fixedCandidate: undefined, smartCandidate: undefined },
++    { fixedCandidate: { ...fixedCandidate, status: 'weather_unknown' }, smartCandidate: { ...smartCandidate, status: 'route_failed' } },
++  ]) {
++    const result = mergeAdvanceCandidates({ ...input, ...changes });
++    assert.equal(result.action, 'keep_existing');
++    assert.equal(result.candidate, null);
++    assert.equal(result.selectedMode, null);
++    assert.equal(result.status, 'unavailable');
++  }
++});
++
++test('非法公共时间或已经到期的基础闹钟不能生成候选', () => {
++  for (const changes of [
++    { now: undefined }, { now: null }, { now: NaN }, { now: Infinity }, { now: '05:00' },
++    { baseAlarmAt: null }, { baseAlarmAt: NaN }, { baseAlarmAt: 8640000000000001 },
++    { baseAlarmAt: now }, { baseAlarmAt: now - 1 },
++  ]) {
++    const result = mergeAdvanceCandidates({ ...input, ...changes });
++    assert.equal(result.action, 'keep_existing');
++    assert.equal(result.candidate, null);
++  }
++});
++
++test('字符串开关不能按真值开启模式', () => {
++  const result = mergeAdvanceCandidates({ ...input, fixedEnabled: 'true', smartEnabled: 'false' });
++  assert.equal(result.action, 'keep_existing');
++  assert.equal(result.candidate, null);
++});
++
++test('智能上限处理后的候选保留 capped 与缺口，不能伪装为完全足够', () => {
++  const result = mergeAdvanceCandidates({ ...input, smartCandidate: { ...smartCandidate, status: 'capped', gapMinutes: 15 } });
++  assert.equal(result.selectedMode, 'smart');
++  assert.equal(result.status, 'capped');
++  assert.equal(result.candidate.status, 'capped');
++  assert.equal(result.candidate.gapMinutes, 15);
++});
++
++test('没有有效缺口的 capped 智能结果和 capped 固定结果不能作为可用候选', () => {
++  for (const gapMinutes of [null, undefined, 0, -1, NaN, Infinity, '15']) {
++    const result = mergeAdvanceCandidates({ ...input, smartCandidate: { ...smartCandidate, status: 'capped', gapMinutes } });
++    assert.equal(result.selectedMode, 'fixed');
++  }
++  const result = mergeAdvanceCandidates({ ...input, smartEnabled: false, fixedCandidate: { ...fixedCandidate, status: 'capped', gapMinutes: 15 } });
++  assert.equal(result.candidate, null);
++});
++
++test('跨日候选按完整时间戳比较，不按钟面排序', () => {
++  const result = mergeAdvanceCandidates({
++    ...input,
++    now: Date.parse('2026-10-29T23:00:00+08:00'),
++    baseAlarmAt: Date.parse('2026-10-30T00:10:00+08:00'),
++    fixedCandidate: { ...fixedCandidate, baseAlarmAt: Date.parse('2026-10-30T00:10:00+08:00'), wakeAt: Date.parse('2026-10-29T23:40:00+08:00') },
++    smartCandidate: { ...smartCandidate, baseAlarmAt: Date.parse('2026-10-30T00:10:00+08:00'), wakeAt: Date.parse('2026-10-30T00:00:00+08:00') },
++  });
++  assert.equal(result.selectedMode, 'fixed');
++  assert.equal(result.candidate.wakeAt, Date.parse('2026-10-29T23:40:00+08:00'));
++});
++
++test('输出只是新建议，不能沿用输入的已保存或已同步状态', () => {
++  const result = mergeAdvanceCandidates({ ...input, smartCandidate: { ...smartCandidate, executionState: 'synced' } });
++  assert.equal(result.candidate.executionState, 'suggested');
++});
++
++test('不修改输入，重复计算一致；返回对象不与输入候选共用引用', () => {
++  const before = structuredClone(input);
++  const result = mergeAdvanceCandidates(input);
++  assert.deepEqual(input, before);
++  assert.deepEqual(result, mergeAdvanceCandidates(input));
++  assert.notEqual(result.candidate, smartCandidate);
++  result.candidate.wakeAt = 0;
++  assert.equal(smartCandidate.wakeAt, Date.parse('2026-10-30T06:10:00+08:00'));
++});
+diff --git a/tests/smartAdvance.test.js b/tests/smartAdvance.test.js
+new file mode 100644
+index 0000000..a7c44ae
+--- /dev/null
++++ b/tests/smartAdvance.test.js
+@@ -0,0 +1,108 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { calculateSmartCandidate } from '../src/smartAdvance.js';
++
++const now = Date.parse('2026-10-30T05:00:00+08:00');
++const input = Object.freeze({
++  baseAlarmAt: Date.parse('2026-10-30T07:00:00+08:00'),
++  arrivalAt: Date.parse('2026-10-30T08:00:00+08:00'),
++  durationMinutes: 60, preparation: 30, buffer: 10, extra: 10,
++  maxAdvance: 60, smartEnabled: true, weatherTriggered: true,
++  validUntil: Date.parse('2026-10-30T05:15:00+08:00'), updatedAt: now, now,
++});
++
++test('按交通、准备、余量和雨雪准备倒推，不使用大模型计算时间', () => {
++  const result = calculateSmartCandidate(input);
++  assert.equal(result.status, 'ready');
++  assert.equal(result.wakeAt, Date.parse('2026-10-30T06:10:00+08:00'));
++  assert.equal(result.desiredWakeAt, Date.parse('2026-10-30T06:10:00+08:00'));
++  assert.equal(result.departAt, Date.parse('2026-10-30T06:50:00+08:00'));
++  assert.equal(result.gapMinutes, 0);
++  assert.equal(result.baseAlarmAt, input.baseAlarmAt);
++  assert.equal(result.source, 'smart');
++  assert.equal(result.executionState, 'suggested');
++});
++
++test('用户上限30分钟时只提前到06:30，明确还有20分钟缺口', () => {
++  const result = calculateSmartCandidate({ ...input, maxAdvance: 30 });
++  assert.equal(result.status, 'capped');
++  assert.equal(result.wakeAt, Date.parse('2026-10-30T06:30:00+08:00'));
++  assert.equal(result.gapMinutes, 20);
++});
++
++test('上限0时不生成重复基础的额外闹钟，但仍显示缺口', () => {
++  const result = calculateSmartCandidate({ ...input, maxAdvance: 0 });
++  assert.equal(result.status, 'capped');
++  assert.equal(result.wakeAt, null);
++  assert.equal(result.gapMinutes, 50);
++});
++
++test('无需提前的方案不生成延后闹钟', () => {
++  const result = calculateSmartCandidate({ ...input, durationMinutes: 0, preparation: 10, buffer: 0, extra: 0 });
++  assert.equal(result.status, 'unavailable');
++  assert.equal(result.wakeAt, null);
++});
++
++test('模式关闭和天气未触发不生成智能候选', () => {
++  for (const changes of [{ smartEnabled: false }, { smartEnabled: 'true' }, { weatherTriggered: false }]) {
++    const result = calculateSmartCandidate({ ...input, ...changes });
++    assert.equal(result.status, 'unavailable');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('未知天气或字符串触发值不按下雨处理', () => {
++  for (const weatherTriggered of [null, undefined, 'false', 60]) {
++    const result = calculateSmartCandidate({ ...input, weatherTriggered });
++    assert.equal(result.status, 'weather_unknown');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('缺失或非法路线耗时不能假装零分钟路线', () => {
++  for (const durationMinutes of [undefined, null, -1, 1441, 1.5, NaN, Infinity, '60']) {
++    const result = calculateSmartCandidate({ ...input, durationMinutes });
++    assert.equal(result.status, 'route_failed');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('非法设置分钟数不参与计算', () => {
++  for (const key of ['preparation', 'buffer', 'extra', 'maxAdvance']) {
++    for (const value of [-1, 241, 1.5, null, undefined, '30']) {
++      const result = calculateSmartCandidate({ ...input, [key]: value });
++      assert.equal(result.status, 'unavailable');
++      assert.equal(result.wakeAt, null);
++    }
++  }
++});
++
++test('过期、缺失有效期或未来更新时间不生成候选', () => {
++  for (const changes of [{ validUntil: now }, { validUntil: null }, { validUntil: Infinity }, { updatedAt: null }, { updatedAt: now + 1 }]) {
++    const result = calculateSmartCandidate({ ...input, ...changes });
++    assert.equal(result.status, 'unavailable');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('非法公共日期及已经错过的叫醒时间不生成过去闹钟', () => {
++  for (const changes of [{ baseAlarmAt: '07:00' }, { arrivalAt: null }, { arrivalAt: now }, { now: null }, { now: Date.parse('2026-10-30T06:10:00+08:00'), validUntil: input.baseAlarmAt }]) {
++    const result = calculateSmartCandidate({ ...input, ...changes });
++    assert.equal(result.status, 'unavailable');
++    assert.equal(result.wakeAt, null);
++  }
++});
++
++test('跨午夜正确倒推到前一天，输入不变且结果可重复', () => {
++  const args = Object.freeze({ ...input,
++    now: Date.parse('2026-10-29T22:00:00+08:00'), updatedAt: Date.parse('2026-10-29T22:00:00+08:00'),
++    validUntil: Date.parse('2026-10-29T22:15:00+08:00'),
++    baseAlarmAt: Date.parse('2026-10-30T00:30:00+08:00'), arrivalAt: Date.parse('2026-10-30T01:00:00+08:00'),
++  });
++  const before = structuredClone(args);
++  const result = calculateSmartCandidate(args);
++  assert.equal(result.wakeAt, Date.parse('2026-10-29T23:30:00+08:00'));
++  assert.equal(result.gapMinutes, 20);
++  assert.deepEqual(result, calculateSmartCandidate(args));
++  assert.deepEqual(args, before);
++});
