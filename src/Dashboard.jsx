@@ -293,7 +293,9 @@ export default function Dashboard(){
    {weatherError&&<p className="inline-error">天气更新失败：{weatherError} {weather?'（保留上次数据）':''}</p>}
    {notice&&<div className="notice-banner" role="alert"><Glyph name="bell"/><span>{notice.text}</span>{notice.tag&&notice.tag.startsWith('plan-')&&(()=>{const plan=plans.find(p=>`plan-${p.id}`===notice.tag);if(!plan)return null;const link=planAmapLink(plan);return <><button className="notice-action" onClick={()=>snoozePlan(plan.id)}>延后 30 分钟</button>{link?<a className="notice-action amap" href={link} target="_blank" rel="noreferrer">高德实时路况 <Glyph name="arrow"/></a>:null}</>;})()}<button onClick={()=>setNotice(null)} aria-label="关闭提醒">×</button></div>}
    {view==='alarm'&&<>
-    <div className="welcome"><span className="overline">MAKE ROOM FOR A GOOD MORNING</span><h1>把早晨，<br/><em>留给从容。</em></h1><p>{commuteWindow?(commuteWet?'预计出发时段有雨雪，闹钟会自动提前，你只管睡。':'预计出发时段无明显雨雪，按计划出发就好。'):'设好家、公司和到达时间，明早的安排交给吉时。'}</p></div>
+    <div className="welcome"><span className="overline">MAKE ROOM FOR A GOOD MORNING</span><h1>把早晨，<br/><em>留给从容。</em></h1><p>{commuteWindow?(commuteWet?'预计出发时段有雨雪，闹钟会自动提前，你只管睡。':'预计出发时段无明显雨雪，按计划出发就好。'):'设好家、公司和到达时间，明早的安排交给吉时。'}</p>
+     <a className="text-link" href={import.meta.env.BASE_URL + 'tools/important-alarm-lab.html'} target="_blank" rel="noopener noreferrer" aria-label="步数保障闹钟演示（在新窗口打开）">步数保障闹钟演示 <span aria-hidden="true">↗</span></a>
+    </div>
     <CoreCard forecast={tomorrowForecast} window={commuteWindow} advance={smartAdvance} smartAlarm={smartAlarm} busy={planBusy} extra={extra} maxAdvance={maxAdvance} threshold={Number(prefs.threshold)} onWake={smartWake} onCancel={()=>setAlarms(v=>v.filter(a=>a.id!==smartAlarm?.id))}/>
     <ForecastCard forecast={tomorrowForecast} threshold={Number(prefs.threshold)} onOpen={()=>setView('weather')}/>
     <div className="focus-grid">
@@ -311,7 +313,9 @@ export default function Dashboard(){
     <section className="panel glass"><h2>天气怎么影响你的闹钟</h2><p>出发时段出现雨雪，或降水概率达到阈值时，叫醒时间会按「雨雪额外准备」自动提前；超过提前上限会先请你确认，不会擅自改动已有闹钟。</p><button className="soft-button" onClick={()=>setView('commute')}>去设置通勤与提前规则 <Glyph name="arrow"/></button></section>
    </>}
    {view==='commute'&&<>
-    <div className="page-intro"><span className="overline">AMAP / YOUR DAILY JOURNEY</span><h1>从家，到公司。</h1><p>高德地图提供地点搜索、路线、地图预览和导航入口。</p></div>
+    <div className="page-intro"><span className="overline">AMAP / YOUR DAILY JOURNEY</span><h1>从家，到公司。</h1><p>高德地图提供地点搜索、路线、地图预览和导航入口。</p>
+     <a className="text-link" href={import.meta.env.BASE_URL + 'tools/commute-lab.html'} target="_blank" rel="noopener noreferrer" aria-label="通勤计算场景演示（在新窗口打开）">通勤计算场景演示 <span aria-hidden="true">↗</span></a>
+    </div>
     <section className="panel glass plans-panel"><div className="section-title"><h2>出行计划 <span>{String(plans.length).padStart(2,'0')}</span></h2><button className="text-link" onClick={()=>openPlanEditor()}><Glyph name="plus"/>添加计划</button></div>
      <p>不止早晨：任何时段的出行都能提前提醒。到点会弹提醒并附出发时段天气，一键查看高德实时路况。</p>
      <div className="plan-list">
