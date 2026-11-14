@@ -11,7 +11,7 @@ function harness(){
  let clock=100000,created=0;
  class Audio {state='running';currentTime=0;destination={};constructor(){created++;}resume(){this.state='running';return Promise.resolve();}close(){this.state='closed';return Promise.resolve();}createOscillator(){return {type:'',frequency:{value:0},connect(){},start(){},stop(){},disconnect(){}};}createGain(){return {gain:{setValueAtTime(){},linearRampToValueAtTime(){}},connect(){},disconnect(){}};}}
  const win=new EventTarget();win.AudioContext=Audio;
- const source=readFileSync(new URL('../tools/important-alarm-lab.js',import.meta.url),'utf8').replace(/^import .*;\n/,'');
+ const source=readFileSync(new URL('../tools/important-alarm-lab.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/,'');
  const context=vm.createContext({window:win,document:{getElementById:id=>elements[id]},createImportantAlarm,transitionImportantAlarm,
   Date:class extends Date{static now(){return clock;}},crypto:{randomUUID:()=>`test-${clock}`},setInterval:()=>1,clearInterval(){},setTimeout:()=>2,clearTimeout(){}});
  vm.runInContext(source,context);
